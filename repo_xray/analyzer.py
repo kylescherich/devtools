@@ -16,44 +16,38 @@ class TooManyFiles(TargetError):
     pass
 
 
-def _path_to_module(rel_path, root_path):
-    """Convert a relative path to a dotted module name.
+def _compute_module_name(rel_path, root_path):
+    """Compute dotted module name by walking UP from file's directory.
     
-    Module name = consecutive ancestor directories with __init__.py + file stem.
-    For __init__.py, just the package name.
-    Files not in a package are top-level modules named by stem.
+    Start with file stem (nothing for __init__.py), then while current directory
+    is inside root (never root itself or above) and contains __init__.py,
+    prepend that directory's name and move to parent.
     """
     parts = list(rel_path.parts)
     
-    if not parts:
+    if not parts or not parts[-1].endswith('.py'):
         return None
     
-    # Remove .py extension from last part
-    if parts[-1].endswith('.py'):
-        parts[-1] = parts[-1][:-3]
+    # Start with file stem
+    filename = parts[-1][:-3]  # Remove .py
+    is_init = filename == '__init__'
     
-    # If it's __init__.py, use the package name
-    is_init = parts[-1] == '__init__'
     if is_init:
-        parts = parts[:-1]
+        module_parts = []
+    else:
+        module_parts = [filename]
     
-    if not parts:
-        return None
+    # Walk UP from file's directory
+    current_dir = rel_path.parent
     
-    # Find consecutive ancestor directories with __init__.py
-    package_parts = []
-    for i in range(len(parts) - (0 if is_init else 1)):
-        check_path = root_path / Path(*parts[:i+1])
-        if (check_path / '__init__.py').exists():
-            package_parts.append(parts[i])
+    while current_dir != Path('.'):
+        # Check if current directory contains __init__.py
+        init_file = root_path / current_dir / '__init__.py'
+        if init_file.exists():
+            module_parts.insert(0, current_dir.name)
+            current_dir = current_dir.parent
         else:
             break
-    
-    # Module name is package parts + file stem (unless it's __init__.py)
-    if is_init:
-        module_parts = package_parts
-    else:
-        module_parts = package_parts + [parts[-1]]
     
     if not module_parts:
         return None
@@ -61,13 +55,32 @@ def _path_to_module(rel_path, root_path):
     return '.'.join(module_parts)
 
 
-def _analyze_file(root_path, rel_path, model):
-    """Analyze a single Python file."""
-    filepath = root_path / rel_path
-    module_name = _path_to_module(rel_path, root_path)
+def _compute_path_based_name(rel_path):
+    """Compute full path-based dotted name for collision resolution.
     
-    if not module_name:
-        return
+    Converts relative path to dotted name: "/" -> ".", no ".py", no trailing "__init__".
+    """
+    parts = list(rel_path.parts)
+    
+    if not parts or not parts[-1].endswith('.py'):
+        return None
+    
+    # Remove .py extension
+    parts[-1] = parts[-1][:-3]
+    
+    # Remove trailing __init__
+    if parts[-1] == '__init__':
+        parts = parts[:-1]
+    
+    if not parts:
+        return None
+    
+    return '.'.join(parts)
+
+
+def _parse_file(root_path, rel_path, module_name, model):
+    """Parse a single Python file and extract raw data (pass 2)."""
+    filepath = root_path / rel_path
     
     try:
         with open(filepath, 'r', encoding='utf-8') as f:
@@ -94,14 +107,14 @@ def _analyze_file(root_path, rel_path, model):
     if docstring:
         docstring = docstring.split('\n')[0]
     
-    # Initialize module info
+    # Initialize module info with raw_imports for pass 2
     module_info = {
         "path": str(rel_path.as_posix()),
         "is_package": is_package,
         "docstring": docstring,
         "classes": [],
         "functions": [],
-        "imports": [],
+        "raw_imports": [],  # Will be resolved in pass 3
         "has_main_guard": False
     }
     
@@ -145,15 +158,9 @@ def _analyze_file(root_path, rel_path, model):
             func_info = _extract_function(node)
             module_info["functions"].append(func_info)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            _extract_imports(node, module_name, package, root_path, model, module_info)
+            _extract_raw_imports(node, module_name, package, model, module_info)
     
     model["modules"][module_name] = module_info
-    
-    # Check if this is a test file
-    filename = rel_path.name
-    if filename.startswith('test_') or filename.endswith('_test.py'):
-        test_info = _extract_test_info(module_name, module_info, model)
-        model["tests"].append(test_info)
 
 
 def _extract_class(node):
@@ -241,22 +248,17 @@ def _get_attribute_name(node):
     return ""
 
 
-def _extract_imports(node, module_name, package, root_path, model, module_info):
-    """Extract import information from an import node."""
+def _extract_raw_imports(node, module_name, package, model, module_info):
+    """Extract raw import information from an import node (pass 2)."""
     if isinstance(node, ast.Import):
         for alias in node.names:
-            # Find longest known module/package prefix
-            target = _resolve_import_target(alias.name, model)
-            internal = target in model["modules"]
-            module_info["imports"].append({
-                "target": target,
-                "internal": internal,
+            # Record the written name
+            module_info["raw_imports"].append({
+                "kind": "import",
+                "name": alias.name,
                 "lineno": node.lineno
             })
     elif isinstance(node, ast.ImportFrom):
-        # Check if inside try block
-        in_try = _is_in_try(node)
-        
         if node.module is None and node.level > 0:
             # from . import something or from .. import something
             resolved = _resolve_relative_import(package, node.level, None)
@@ -270,44 +272,7 @@ def _extract_imports(node, module_name, package, root_path, model, module_info):
                     "lineno": node.lineno
                 })
                 return
-            
-            # Track unique targets for this statement
-            targets_seen = set()
-            
-            for alias in node.names:
-                if alias.name == '*':
-                    model["unresolved"].append({
-                        "module": module_name,
-                        "kind": "star",
-                        "detail": resolved,
-                        "lineno": node.lineno
-                    })
-                else:
-                    candidate = f"{resolved}.{alias.name}"
-                    # Check if candidate is a known module
-                    if candidate in model["modules"]:
-                        target = candidate
-                    else:
-                        target = resolved
-                    
-                    if target in targets_seen:
-                        continue
-                    targets_seen.add(target)
-                    
-                    if in_try:
-                        model["unresolved"].append({
-                            "module": module_name,
-                            "kind": "try",
-                            "detail": target,
-                            "lineno": node.lineno
-                        })
-                    else:
-                        internal = target in model["modules"]
-                        module_info["imports"].append({
-                            "target": target,
-                            "internal": internal,
-                            "lineno": node.lineno
-                        })
+            base_module = resolved
         else:
             # from module import something
             if node.level > 0:
@@ -325,51 +290,23 @@ def _extract_imports(node, module_name, package, root_path, model, module_info):
                 base_module = resolved
             else:
                 base_module = node.module
-            
-            # Track unique targets for this statement
-            targets_seen = set()
-            
-            for alias in node.names:
-                if alias.name == '*':
-                    model["unresolved"].append({
-                        "module": module_name,
-                        "kind": "star",
-                        "detail": base_module,
-                        "lineno": node.lineno
-                    })
-                else:
-                    candidate = f"{base_module}.{alias.name}" if base_module else alias.name
-                    # Check if candidate is a known module
-                    if candidate in model["modules"]:
-                        target = candidate
-                    else:
-                        target = base_module
-                    
-                    if target in targets_seen:
-                        continue
-                    targets_seen.add(target)
-                    
-                    if in_try:
-                        model["unresolved"].append({
-                            "module": module_name,
-                            "kind": "try",
-                            "detail": target,
-                            "lineno": node.lineno
-                        })
-                    else:
-                        internal = target in model["modules"]
-                        module_info["imports"].append({
-                            "target": target,
-                            "internal": internal,
-                            "lineno": node.lineno
-                        })
-
-
-def _is_in_try(node):
-    """Check if a node is inside a try block."""
-    # This is a simplified check - we'd need parent tracking for full accuracy
-    # For now, we'll detect this during a separate pass
-    return False
+        
+        # Record raw import data
+        for alias in node.names:
+            if alias.name == '*':
+                model["unresolved"].append({
+                    "module": module_name,
+                    "kind": "star",
+                    "detail": base_module,
+                    "lineno": node.lineno
+                })
+            else:
+                module_info["raw_imports"].append({
+                    "kind": "from",
+                    "base": base_module,
+                    "name": alias.name,
+                    "lineno": node.lineno
+                })
 
 
 def _resolve_relative_import(package, level, module):
@@ -394,70 +331,115 @@ def _resolve_relative_import(package, level, module):
     return '.'.join(parts) if parts else None
 
 
-def _resolve_import_target(import_name, model):
-    """Resolve import target to longest known module/package prefix.
-    
-    For 'import X.Y.Z', return the longest prefix that exists in model["modules"].
-    If no prefix exists, return the name as written.
-    """
-    parts = import_name.split('.')
-    
-    # Try progressively longer prefixes
-    for i in range(len(parts), 0, -1):
-        candidate = '.'.join(parts[:i])
-        if candidate in model["modules"]:
-            return candidate
-    
-    # No known prefix, return as written
-    return import_name
+def _resolve_imports_pass3(model):
+    """Resolve raw imports to targets (pass 3, after all modules are known)."""
+    for module_name, module_info in model["modules"].items():
+        imports = []
+        
+        for raw_import in module_info["raw_imports"]:
+            if raw_import["kind"] == "import":
+                # import X.Y - find longest known prefix
+                name = raw_import["name"]
+                parts = name.split('.')
+                
+                target = None
+                for i in range(len(parts), 0, -1):
+                    candidate = '.'.join(parts[:i])
+                    if candidate in model["modules"]:
+                        target = candidate
+                        break
+                
+                if target is None:
+                    target = name
+                
+                internal = target in model["modules"]
+                imports.append({
+                    "target": target,
+                    "internal": internal,
+                    "lineno": raw_import["lineno"]
+                })
+            
+            elif raw_import["kind"] == "from":
+                # from X import a - check if X.a is a module, else use X
+                base = raw_import["base"]
+                name = raw_import["name"]
+                
+                candidate = f"{base}.{name}" if base else name
+                if candidate in model["modules"]:
+                    target = candidate
+                else:
+                    target = base
+                
+                internal = target in model["modules"]
+                imports.append({
+                    "target": target,
+                    "internal": internal,
+                    "lineno": raw_import["lineno"]
+                })
+        
+        # Deduplicate by (target, lineno) to get one entry per distinct target per statement
+        seen = set()
+        unique_imports = []
+        for imp in imports:
+            key = (imp["target"], imp["lineno"])
+            if key not in seen:
+                seen.add(key)
+                unique_imports.append(imp)
+        
+        module_info["imports"] = unique_imports
+        del module_info["raw_imports"]
 
 
-def _extract_test_info(module_name, module_info, model):
-    """Extract test information."""
-    # Get imported internal modules
-    inferred_targets = []
-    for imp in module_info["imports"]:
-        if imp["internal"]:
-            inferred_targets.append(imp["target"])
-    
-    # Try to infer target from test name
-    # test_core.py -> core, core_test.py -> core
-    parts = module_name.split('.')
-    test_file = parts[-1]
-    
-    if test_file.startswith('test_'):
-        target_name = test_file[5:]  # Remove 'test_'
-    elif test_file.endswith('_test'):
-        target_name = test_file[:-5]  # Remove '_test'
-    else:
-        target_name = None
-    
-    if target_name:
-        # Try to find a matching module
-        test_package = '.'.join(parts[:-1])
-        if test_package:
-            candidate = f"{test_package}.{target_name}"
+def _build_tests_pass3(model):
+    """Build test information from resolved imports (pass 3)."""
+    for module_name, module_info in model["modules"].items():
+        # Check if this is a test file
+        parts = module_name.split('.')
+        test_file = parts[-1]
+        
+        if not (test_file.startswith('test_') or test_file.endswith('_test')):
+            continue
+        
+        # Get imported internal modules
+        inferred_targets = []
+        for imp in module_info["imports"]:
+            if imp["internal"] and imp["target"] not in inferred_targets:
+                inferred_targets.append(imp["target"])
+        
+        # Try to infer target from test name
+        if test_file.startswith('test_'):
+            target_name = test_file[5:]  # Remove 'test_'
+        elif test_file.endswith('_test'):
+            target_name = test_file[:-5]  # Remove '_test'
         else:
-            candidate = target_name
+            target_name = None
         
-        # Check if this module exists in our model
-        if candidate in model["modules"] and candidate not in inferred_targets:
-            inferred_targets.append(candidate)
+        if target_name:
+            # Try to find a matching module
+            test_package = '.'.join(parts[:-1])
+            if test_package:
+                candidate = f"{test_package}.{target_name}"
+            else:
+                candidate = target_name
+            
+            # Check if this module exists in our model
+            if candidate in model["modules"] and candidate not in inferred_targets:
+                inferred_targets.append(candidate)
+            
+            # Also check parent package
+            if test_package:
+                parent_parts = test_package.split('.')
+                if len(parent_parts) > 1:
+                    parent_package = '.'.join(parent_parts[:-1])
+                    candidate = f"{parent_package}.{target_name}"
+                    if candidate in model["modules"] and candidate not in inferred_targets:
+                        inferred_targets.append(candidate)
         
-        # Also check parent package
-        if test_package:
-            parent_parts = test_package.split('.')
-            if len(parent_parts) > 1:
-                parent_package = '.'.join(parent_parts[:-1])
-                candidate = f"{parent_package}.{target_name}"
-                if candidate in model["modules"] and candidate not in inferred_targets:
-                    inferred_targets.append(candidate)
-    
-    return {
-        "module": module_name,
-        "inferred_targets": inferred_targets,
-        "inferred": True
-    }
+        model["tests"].append({
+            "module": module_name,
+            "inferred_targets": inferred_targets,
+            "inferred": True
+        })
 
 
 # Second pass to detect imports in try blocks and importlib/__import__ calls
@@ -538,7 +520,6 @@ def _second_pass_unresolved(root_path, model):
                     })
 
 
-# Update analyze to include second pass
 def analyze(root, max_files=2000):
     """Analyze a Python repository.
     
@@ -569,9 +550,8 @@ def analyze(root, max_files=2000):
         "parse_errors": []
     }
     
-    # Find all Python files and packages
+    # Collect all Python files
     py_files = []
-    packages = set()
     
     for dirpath, dirnames, filenames in os.walk(root_path, followlinks=False):
         # Skip symlinked directories
@@ -581,12 +561,6 @@ def analyze(root, max_files=2000):
         dirnames[:] = [d for d in dirnames if not d.startswith('.') and d != '__pycache__']
         dirnames[:] = [d for d in dirnames if d not in ('venv', 'env') and 
                       not os.path.exists(os.path.join(dirpath, d, 'pyvenv.cfg'))]
-        
-        # Check if this is a package
-        if '__init__.py' in filenames:
-            rel_path = Path(dirpath).relative_to(root_path)
-            if rel_path != Path('.'):
-                packages.add(rel_path)
         
         # Collect .py files (skip symlinks)
         for filename in filenames:
@@ -601,14 +575,36 @@ def analyze(root, max_files=2000):
     
     model["files_scanned"] = len(py_files)
     
-    # Convert package paths to dotted names using same logic as modules
-    for pkg_path in sorted(packages):
-        # For a package, compute its name the same way as _path_to_module
-        # but treating the directory itself as an __init__.py
-        init_path = pkg_path / '__init__.py'
-        module_name = _path_to_module(init_path, root_path)
+    # PASS 1: Compute module names for all files
+    path_to_name = {}
+    name_to_paths = {}
+    
+    for filepath in py_files:
+        rel_path = Path(filepath).relative_to(root_path)
+        module_name = _compute_module_name(rel_path, root_path)
+        
         if module_name:
-            model["packages"].append(module_name)
+            path_to_name[str(rel_path.as_posix())] = module_name
+            if module_name not in name_to_paths:
+                name_to_paths[module_name] = []
+            name_to_paths[module_name].append(str(rel_path.as_posix()))
+    
+    # Handle collisions: use path-based names for any name with multiple paths
+    for module_name, paths in name_to_paths.items():
+        if len(paths) > 1:
+            for path in paths:
+                rel_path = Path(path)
+                path_based_name = _compute_path_based_name(rel_path)
+                if path_based_name:
+                    path_to_name[path] = path_based_name
+    
+    # Build packages list from __init__.py files
+    for filepath in py_files:
+        rel_path = Path(filepath).relative_to(root_path)
+        if rel_path.name == '__init__.py':
+            path_str = str(rel_path.as_posix())
+            if path_str in path_to_name:
+                model["packages"].append(path_to_name[path_str])
     
     # Parse console scripts from pyproject.toml
     pyproject_path = root_path / 'pyproject.toml'
@@ -628,41 +624,20 @@ def analyze(root, max_files=2000):
         except Exception:
             pass
     
-    # Parse each Python file
+    # PASS 2: Parse each Python file
     for filepath in py_files:
         rel_path = Path(filepath).relative_to(root_path)
-        _analyze_file(root_path, rel_path, model)
+        path_str = str(rel_path.as_posix())
+        
+        if path_str in path_to_name:
+            module_name = path_to_name[path_str]
+            _parse_file(root_path, rel_path, module_name, model)
     
-    # Check for module name collisions and resolve with full path-based names
-    name_to_paths = {}
-    for module_name, module_info in list(model["modules"].items()):
-        if module_name not in name_to_paths:
-            name_to_paths[module_name] = []
-        name_to_paths[module_name].append(module_info["path"])
-    
-    # If any name has multiple paths, rename all to full path-based names
-    for module_name, paths in name_to_paths.items():
-        if len(paths) > 1:
-            for path in paths:
-                # Remove old entry
-                del model["modules"][module_name]
-                
-                # Create full path-based name
-                rel_path = Path(path)
-                parts = list(rel_path.parts)
-                if parts[-1].endswith('.py'):
-                    parts[-1] = parts[-1][:-3]
-                if parts[-1] == '__init__':
-                    parts = parts[:-1]
-                full_name = '.'.join(parts) if parts else None
-                
-                if full_name:
-                    # Re-add with full name
-                    module_info = model["modules"].get(module_name)
-                    if module_info:
-                        model["modules"][full_name] = module_info
-    
-    # Second pass for dynamic imports
+    # Second pass for dynamic imports (try blocks, importlib, __import__)
     _second_pass_unresolved(root_path, model)
+    
+    # PASS 3: Resolve imports now that all module names are known
+    _resolve_imports_pass3(model)
+    _build_tests_pass3(model)
     
     return model
