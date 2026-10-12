@@ -8,7 +8,10 @@ import sqlite3
 from pathlib import Path
 
 from askdata.sqliteinspect import inspect_sqlite, open_readonly, InspectError
-from tests.askdata_fixtures import fk_db, empty_db, hostile_db, not_a_db, mixed_db
+from tests.askdata_fixtures import (
+    fk_db, empty_db, hostile_db, not_a_db, mixed_db,
+    wal_db, fts_db, hostile_view_db
+)
 
 
 class TestSQLiteInspect(unittest.TestCase):

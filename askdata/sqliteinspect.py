@@ -11,11 +11,12 @@ class InspectError(Exception):
     pass
 
 
-def open_readonly(path):
+def open_readonly(path, frozen=False):
     """Open a SQLite database in read-only mode with security restrictions.
     
     Args:
         path: Path to the database file
+        frozen: If True, add immutable=1 flag (for static copies only)
         
     Returns:
         sqlite3.Connection object configured for read-only access
@@ -33,16 +34,43 @@ def open_readonly(path):
     if not path.is_file():
         raise InspectError("not a file")
     
+    # Read first 100 bytes to check for WAL mode
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(100)
+    except (OSError, PermissionError) as e:
+        raise InspectError("not a file") from e
+    
+    # Check if database is in WAL mode (bytes 18 and 19 both == 2)
+    if len(header) >= 20 and header[18] == 2 and header[19] == 2:
+        # WAL mode detected
+        if not frozen:
+            shm_path = Path(str(path) + "-shm")
+            if not shm_path.exists():
+                raise InspectError("WAL database without -shm access; copy it and use --frozen")
+    
     # Build read-only URI
-    uri = "file:" + urllib.parse.quote(str(path.resolve())) + "?mode=ro&immutable=1"
+    uri = "file:" + urllib.parse.quote(str(path.resolve())) + "?mode=ro"
+    if frozen:
+        uri += "&immutable=1"
     
     try:
         conn = sqlite3.connect(uri, uri=True)
-    except sqlite3.DatabaseError as e:
+    except sqlite3.Error as e:
+        error_name = getattr(e, 'sqlite_errorname', '')
+        if error_name == 'SQLITE_CANTOPEN' or error_name.startswith('SQLITE_READONLY'):
+            raise InspectError("WAL database without -shm access; copy it and use --frozen") from e
         raise InspectError("not a SQLite database") from e
     
     # Enable query-only mode
-    conn.execute("PRAGMA query_only=1")
+    try:
+        conn.execute("PRAGMA query_only=1")
+    except sqlite3.Error as e:
+        conn.close()
+        error_name = getattr(e, 'sqlite_errorname', '')
+        if error_name == 'SQLITE_CANTOPEN' or error_name.startswith('SQLITE_READONLY'):
+            raise InspectError("WAL database without -shm access; copy it and use --frozen") from e
+        raise InspectError("not a SQLite database") from e
     
     # Set up authorizer to restrict operations
     def authorizer(action, arg1, arg2, arg3, arg4):
@@ -63,6 +91,10 @@ def open_readonly(path):
         # Allow only safe pragmas
         if action == sqlite3.SQLITE_PRAGMA:
             pragma_name = (arg1 or "").lower()
+            # data_version only allowed when arg2 is None (FTS5 needs it)
+            if pragma_name == 'data_version' and arg2 is None:
+                return sqlite3.SQLITE_OK
+            # Other allowed pragmas can have arguments
             allowed_pragmas = {
                 'table_info', 'table_xinfo', 'foreign_key_list', 
                 'index_list', 'index_info'
@@ -79,8 +111,11 @@ def open_readonly(path):
     # Verify it's a valid SQLite database
     try:
         conn.execute("SELECT count(*) FROM sqlite_master")
-    except sqlite3.DatabaseError as e:
+    except sqlite3.Error as e:
         conn.close()
+        error_name = getattr(e, 'sqlite_errorname', '')
+        if error_name == 'SQLITE_CANTOPEN' or error_name.startswith('SQLITE_READONLY'):
+            raise InspectError("WAL database without -shm access; copy it and use --frozen") from e
         raise InspectError("not a SQLite database") from e
     
     return conn
@@ -97,13 +132,14 @@ def _is_date_value(value):
     return _is_date(value)
 
 
-def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
+def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
     """Inspect a SQLite database and return analysis.
     
     Args:
         path: Path to the SQLite database file
         max_rows: Maximum rows to analyze per table (default 1,000,000)
         deadline: Optional time.monotonic() deadline for timeout
+        frozen: If True, treat database as unchanging (immutable=1)
         
     Returns:
         Dictionary with database analysis including tables, relationships, and warnings
@@ -114,7 +150,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
     timed_out = False
     
     try:
-        conn = open_readonly(path)
+        conn = open_readonly(path, frozen=frozen)
         
         result = {
             "kind": "sqlite",
@@ -164,13 +200,21 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
                     ]
                     result["relationships"].append(relationship)
                     
-            except sqlite3.OperationalError as e:
-                # Only treat as timeout if deadline is set and passed
+            except sqlite3.DatabaseError as e:
+                # Check if this is a deadline timeout
                 if deadline is not None and time.monotonic() > deadline:
                     timed_out = True
                     break
-                else:
-                    raise
+                # Otherwise, record the error and continue
+                error_msg = str(e)
+                table_info = {
+                    "name": obj_name,
+                    "type": obj_type,
+                    "error": error_msg,
+                    "columns": []
+                }
+                result["tables"].append(table_info)
+                result["warnings"].append(f"{obj_name}: could not be read ({error_msg})")
         
         if timed_out and "timeout: statistics are partial" not in result["warnings"]:
             result["warnings"].append("timeout: statistics are partial")
