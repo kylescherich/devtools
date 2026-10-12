@@ -122,9 +122,12 @@ class TestReport(unittest.TestCase):
         """Graph is omitted for repos with >150 internal modules."""
         # Create a fake model with 151 modules
         model = {
+            'files_scanned': 151,
+            'packages': [],
             'modules': {},
-            'packages': set(),
             'entry_points': [],
+            'tests': [],
+            'unresolved': [],
             'parse_errors': []
         }
         
@@ -132,12 +135,12 @@ class TestReport(unittest.TestCase):
             mod_name = f'module{i}'
             model['modules'][mod_name] = {
                 'path': f'{mod_name}.py',
-                'is_test': False,
+                'is_package': False,
+                'docstring': '',
                 'classes': [],
                 'functions': [],
-                'internal_imports': [],
-                'external_imports': [],
-                'unresolved_imports': []
+                'imports': [],
+                'has_main_guard': False
             }
         
         html = render_html(model, "Large Repo")

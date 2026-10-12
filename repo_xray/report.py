@@ -24,11 +24,15 @@ def _get_most_imported_internal(model):
     """Return list of (module_name, count) for top 5 most-imported internal modules."""
     importers = defaultdict(set)
     
+    # Build set of test module names
+    test_modules = {test['module'] for test in model.get('tests', [])}
+    
     for mod_name, mod_info in model['modules'].items():
-        if mod_info.get('is_test'):
+        if mod_name in test_modules:
             continue
-        for imp in mod_info.get('internal_imports', []):
-            importers[imp].add(mod_name)
+        for imp in mod_info.get('imports', []):
+            if imp.get('internal'):
+                importers[imp['target']].add(mod_name)
     
     # Sort by count descending, then by name for determinism
     sorted_mods = sorted(importers.items(), key=lambda x: (-len(x[1]), x[0]))
@@ -39,10 +43,16 @@ def _get_untested_modules(model):
     """Return sorted list of internal non-test modules with no inferred test targets."""
     untested = []
     
-    for mod_name, mod_info in model['modules'].items():
-        if mod_info.get('is_test'):
+    # Build set of test module names and their targets
+    test_modules = {test['module'] for test in model.get('tests', [])}
+    tested_modules = set()
+    for test in model.get('tests', []):
+        tested_modules.update(test.get('inferred_targets', []))
+    
+    for mod_name in model['modules'].keys():
+        if mod_name in test_modules:
             continue
-        if not mod_info.get('test_targets'):
+        if mod_name not in tested_modules:
             untested.append(mod_name)
     
     return sorted(untested)
@@ -52,9 +62,8 @@ def _count_unresolved_by_kind(model):
     """Return dict of {kind: count} for unresolved imports."""
     counts = defaultdict(int)
     
-    for mod_info in model['modules'].values():
-        for unres in mod_info.get('unresolved_imports', []):
-            counts[unres['kind']] += 1
+    for unres in model.get('unresolved', []):
+        counts[unres['kind']] += 1
     
     return dict(sorted(counts.items()))
 
@@ -69,19 +78,21 @@ def summary(model):
     
     # Counts
     num_modules = len(model['modules'])
-    num_packages = len(model['packages'])
+    num_packages = len(model.get('packages', []))
     
     total_classes = sum(len(m.get('classes', [])) for m in model['modules'].values())
     total_functions = sum(len(m.get('functions', [])) for m in model['modules'].values())
-    total_tests = sum(len(m.get('test_targets', [])) for m in model['modules'].values())
+    total_tests = len(model.get('tests', []))
     
     lines.append(f"Found {num_modules} modules in {num_packages} packages.")
     lines.append(f"Total: {total_classes} classes, {total_functions} functions, {total_tests} tests.")
     
     # Entry points
-    entry_points = sorted(model.get('entry_points', []))
+    entry_points = model.get('entry_points', [])
     if entry_points:
-        lines.append(f"Entry points: {', '.join(entry_points)}.")
+        sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
+        ep_strs = [f"{ep['name']} ({ep['kind']}) in {ep['module']}" for ep in sorted_eps]
+        lines.append(f"Entry points: {', '.join(ep_strs)}.")
     else:
         lines.append("No entry points found.")
     
@@ -118,10 +129,12 @@ def _compute_graph_layers(model):
     
     for mod_name, mod_info in model['modules'].items():
         all_modules.add(mod_name)
-        for imp in mod_info.get('internal_imports', []):
-            if imp in model['modules']:
-                graph[mod_name].append(imp)
-                all_modules.add(imp)
+        for imp in mod_info.get('imports', []):
+            if imp.get('internal'):
+                target = imp['target']
+                if target in model['modules']:
+                    graph[mod_name].append(target)
+                    all_modules.add(target)
     
     # DFS to compute longest path, ignoring back edges
     WHITE, GRAY, BLACK = 0, 1, 2
@@ -158,7 +171,9 @@ def _render_svg_graph(model):
     
     Returns SVG string or message if too many modules.
     """
-    internal_modules = [m for m in model['modules'].keys() if not model['modules'][m].get('is_test')]
+    # Build set of test module names
+    test_modules = {test['module'] for test in model.get('tests', [])}
+    internal_modules = [m for m in model['modules'].keys() if m not in test_modules]
     
     if len(internal_modules) > 150:
         return f'<p>Graph omitted: {len(internal_modules)} modules (limit 150)</p>'
@@ -201,7 +216,7 @@ def _render_svg_graph(model):
     
     # Build SVG
     svg_parts = [
-        f'<svg width="{svg_width}" height="{svg_height}" xmlns="http://www.w3.org/2000/svg">',
+        f'<svg width="{svg_width}" height="{svg_height}">',
         '<defs>',
         '<marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto">',
         '<polygon points="0 0, 10 3, 0 6" fill="#666" />',
@@ -217,16 +232,18 @@ def _render_svg_graph(model):
         cx1 = x1 + node_width / 2
         cy1 = y1 + node_height / 2
         
-        for imp in sorted(mod_info.get('internal_imports', [])):
-            if imp in positions:
-                x2, y2 = positions[imp]
-                cx2 = x2 + node_width / 2
-                cy2 = y2 + node_height / 2
-                
-                svg_parts.append(
-                    f'<line x1="{cx1}" y1="{cy1}" x2="{cx2}" y2="{cy2}" '
-                    f'stroke="#666" stroke-width="1" marker-end="url(#arrowhead)" />'
-                )
+        for imp in mod_info.get('imports', []):
+            if imp.get('internal'):
+                target = imp['target']
+                if target in positions:
+                    x2, y2 = positions[target]
+                    cx2 = x2 + node_width / 2
+                    cy2 = y2 + node_height / 2
+                    
+                    svg_parts.append(
+                        f'<line x1="{cx1}" y1="{cy1}" x2="{cx2}" y2="{cy2}" '
+                        f'stroke="#666" stroke-width="1" marker-end="url(#arrowhead)" />'
+                    )
     
     # Draw nodes
     for mod in sorted(positions.keys()):
@@ -274,10 +291,12 @@ def render_markdown(model, title):
     # Entry points
     lines.append("## Entry points")
     lines.append("")
-    entry_points = sorted(model.get('entry_points', []))
+    entry_points = model.get('entry_points', [])
     if entry_points:
-        for ep in entry_points:
-            lines.append(f"- {_escape_markdown(ep)}")
+        sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
+        for ep in sorted_eps:
+            ep_str = f"{ep['name']} ({ep['kind']}) in {ep['module']}"
+            lines.append(f"- {_escape_markdown(ep_str)}")
     else:
         lines.append("None")
     lines.append("")
@@ -334,18 +353,20 @@ def render_markdown(model, title):
             lines.append("")
         
         # Internal imports
-        if mod_info.get('internal_imports'):
+        internal_imports = [imp['target'] for imp in mod_info.get('imports', []) if imp.get('internal')]
+        if internal_imports:
             lines.append("**Internal imports:**")
             lines.append("")
-            for imp in sorted(mod_info['internal_imports']):
+            for imp in sorted(internal_imports):
                 lines.append(f"- {_escape_markdown(imp)}")
             lines.append("")
         
         # External imports
-        if mod_info.get('external_imports'):
+        external_imports = [imp['target'] for imp in mod_info.get('imports', []) if not imp.get('internal')]
+        if external_imports:
             lines.append("**External imports:**")
             lines.append("")
-            for imp in sorted(mod_info['external_imports']):
+            for imp in sorted(external_imports):
                 lines.append(f"- {_escape_markdown(imp)}")
             lines.append("")
     
@@ -353,15 +374,12 @@ def render_markdown(model, title):
     lines.append("## Tests \\(inferred\\)")
     lines.append("")
     
-    has_tests = False
-    for mod_name in sorted(model['modules'].keys()):
-        mod_info = model['modules'][mod_name]
-        if mod_info.get('test_targets'):
-            has_tests = True
-            for target in sorted(mod_info['test_targets']):
-                lines.append(f"- {_escape_markdown(mod_name)} → {_escape_markdown(target)} (inferred)")
-    
-    if not has_tests:
+    tests = model.get('tests', [])
+    if tests:
+        for test in sorted(tests, key=lambda t: t['module']):
+            for target in sorted(test.get('inferred_targets', [])):
+                lines.append(f"- {_escape_markdown(test['module'])} → {_escape_markdown(target)} (inferred)")
+    else:
         lines.append("None")
     lines.append("")
     
@@ -369,23 +387,14 @@ def render_markdown(model, title):
     lines.append("## Unresolved / dynamic")
     lines.append("")
     
-    unresolved_items = []
-    for mod_name in sorted(model['modules'].keys()):
-        mod_info = model['modules'][mod_name]
-        for unres in mod_info.get('unresolved_imports', []):
-            unresolved_items.append((
-                unres['kind'],
-                mod_name,
-                unres.get('detail', ''),
-                unres.get('line', 0)
-            ))
-    
-    if unresolved_items:
-        for kind, mod_name, detail, line in sorted(unresolved_items):
-            parts = [_escape_markdown(kind), _escape_markdown(mod_name)]
-            if detail:
-                parts.append(_escape_markdown(detail))
-            parts.append(f"line {line}")
+    unresolved = model.get('unresolved', [])
+    if unresolved:
+        sorted_unresolved = sorted(unresolved, key=lambda u: (u['kind'], u['module'], u.get('detail', ''), u['lineno']))
+        for unres in sorted_unresolved:
+            parts = [_escape_markdown(unres['kind']), _escape_markdown(unres['module'])]
+            if unres.get('detail'):
+                parts.append(_escape_markdown(unres['detail']))
+            parts.append(f"line {unres['lineno']}")
             lines.append(f"- {', '.join(parts)}")
     else:
         lines.append("None")
@@ -395,9 +404,11 @@ def render_markdown(model, title):
     lines.append("## Parse errors")
     lines.append("")
     
-    if model.get('parse_errors'):
-        for err in sorted(model['parse_errors']):
-            lines.append(f"- {_escape_markdown(err)}")
+    parse_errors = model.get('parse_errors', [])
+    if parse_errors:
+        sorted_errors = sorted(parse_errors, key=lambda e: (e['path'], e['lineno']))
+        for err in sorted_errors:
+            lines.append(f"- {_escape_markdown(err['path'])} line {err['lineno']}")
     else:
         lines.append("None")
     lines.append("")
@@ -449,11 +460,13 @@ def render_html(model, title):
     
     # Entry points
     lines.append('<h2>Entry points</h2>')
-    entry_points = sorted(model.get('entry_points', []))
+    entry_points = model.get('entry_points', [])
     if entry_points:
+        sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
         lines.append('<ul>')
-        for ep in entry_points:
-            lines.append(f'<li>{_escape_html(ep)}</li>')
+        for ep in sorted_eps:
+            ep_str = f"{ep['name']} ({ep['kind']}) in {ep['module']}"
+            lines.append(f'<li>{_escape_html(ep_str)}</li>')
         lines.append('</ul>')
     else:
         lines.append('<p>None</p>')
@@ -524,61 +537,51 @@ def render_html(model, title):
             lines.append('</ul>')
         
         # Internal imports
-        if mod_info.get('internal_imports'):
+        internal_imports = [imp['target'] for imp in mod_info.get('imports', []) if imp.get('internal')]
+        if internal_imports:
             lines.append('<p><strong>Internal imports:</strong></p>')
             lines.append('<ul>')
-            for imp in sorted(mod_info['internal_imports']):
+            for imp in sorted(internal_imports):
                 lines.append(f'<li>{_escape_html(imp)}</li>')
             lines.append('</ul>')
         
         # External imports
-        if mod_info.get('external_imports'):
+        external_imports = [imp['target'] for imp in mod_info.get('imports', []) if not imp.get('internal')]
+        if external_imports:
             lines.append('<p><strong>External imports:</strong></p>')
             lines.append('<ul>')
-            for imp in sorted(mod_info['external_imports']):
+            for imp in sorted(external_imports):
                 lines.append(f'<li>{_escape_html(imp)}</li>')
             lines.append('</ul>')
     
     # Tests (inferred)
     lines.append('<h2>Tests (inferred)</h2>')
     
-    has_tests = False
-    lines.append('<ul>')
-    for mod_name in sorted(model['modules'].keys()):
-        mod_info = model['modules'][mod_name]
-        if mod_info.get('test_targets'):
-            has_tests = True
-            for target in sorted(mod_info['test_targets']):
+    tests = model.get('tests', [])
+    if tests:
+        lines.append('<ul>')
+        for test in sorted(tests, key=lambda t: t['module']):
+            for target in sorted(test.get('inferred_targets', [])):
                 lines.append(
-                    f'<li>{_escape_html(mod_name)} → {_escape_html(target)} '
+                    f'<li>{_escape_html(test["module"])} → {_escape_html(target)} '
                     f'<em>(inferred)</em></li>'
                 )
-    lines.append('</ul>')
-    
-    if not has_tests:
+        lines.append('</ul>')
+    else:
         lines.append('<p>None</p>')
     
     # Unresolved / dynamic
     lines.append('<h2>Unresolved / dynamic</h2>')
     
-    unresolved_items = []
-    for mod_name in sorted(model['modules'].keys()):
-        mod_info = model['modules'][mod_name]
-        for unres in mod_info.get('unresolved_imports', []):
-            unresolved_items.append((
-                unres['kind'],
-                mod_name,
-                unres.get('detail', ''),
-                unres.get('line', 0)
-            ))
-    
-    if unresolved_items:
+    unresolved = model.get('unresolved', [])
+    if unresolved:
+        sorted_unresolved = sorted(unresolved, key=lambda u: (u['kind'], u['module'], u.get('detail', ''), u['lineno']))
         lines.append('<ul>')
-        for kind, mod_name, detail, line in sorted(unresolved_items):
-            parts = [_escape_html(kind), _escape_html(mod_name)]
-            if detail:
-                parts.append(_escape_html(detail))
-            parts.append(f'line {line}')
+        for unres in sorted_unresolved:
+            parts = [_escape_html(unres['kind']), _escape_html(unres['module'])]
+            if unres.get('detail'):
+                parts.append(_escape_html(unres['detail']))
+            parts.append(f'line {unres["lineno"]}')
             lines.append(f'<li>{", ".join(parts)}</li>')
         lines.append('</ul>')
     else:
@@ -587,10 +590,12 @@ def render_html(model, title):
     # Parse errors
     lines.append('<h2>Parse errors</h2>')
     
-    if model.get('parse_errors'):
+    parse_errors = model.get('parse_errors', [])
+    if parse_errors:
+        sorted_errors = sorted(parse_errors, key=lambda e: (e['path'], e['lineno']))
         lines.append('<ul>')
-        for err in sorted(model['parse_errors']):
-            lines.append(f'<li>{_escape_html(err)}</li>')
+        for err in sorted_errors:
+            lines.append(f'<li>{_escape_html(err["path"])} line {err["lineno"]}</li>')
         lines.append('</ul>')
     else:
         lines.append('<p>None</p>')
