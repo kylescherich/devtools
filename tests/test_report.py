@@ -1,10 +1,13 @@
 """Tests for report module."""
 
+import os
+import re
+import tempfile
 import unittest
 from html.parser import HTMLParser
 from pathlib import Path
 from repo_xray.analyzer import analyze
-from repo_xray.report import summary, render_html, render_markdown
+from repo_xray.report import summary, render_html, render_markdown, _anchor_ids
 
 
 class TestReport(unittest.TestCase):
@@ -154,6 +157,146 @@ class TestReport(unittest.TestCase):
         
         # No SVG should be present
         self.assertNotIn("<svg", html)
+
+
+    def test_hostile_filename_anchor_is_attribute_safe(self):
+        """Hostile filename with quotes is properly escaped in anchors."""
+        if os.name == 'nt':
+            # Windows doesn't allow quotes in filenames, build model by hand
+            model = {
+                'files_scanned': 1,
+                'packages': ['pkg'],
+                'modules': {
+                    'pkg': {
+                        'path': 'pkg/__init__.py',
+                        'is_package': True,
+                        'docstring': '',
+                        'classes': [],
+                        'functions': [],
+                        'imports': [],
+                        'has_main_guard': False
+                    },
+                    'pkg.x" onmouseover="alert(1)': {
+                        'path': 'pkg/x" onmouseover="alert(1).py',
+                        'is_package': False,
+                        'docstring': '',
+                        'classes': [],
+                        'functions': [],
+                        'imports': [],
+                        'has_main_guard': False
+                    }
+                },
+                'entry_points': [],
+                'tests': [],
+                'unresolved': [],
+                'parse_errors': []
+            }
+        else:
+            # POSIX: create actual files with hostile name
+            with tempfile.TemporaryDirectory() as tmpdir:
+                pkg_dir = Path(tmpdir) / 'pkg'
+                pkg_dir.mkdir()
+                (pkg_dir / '__init__.py').write_text('')
+                (pkg_dir / 'x" onmouseover="alert(1).py').write_text('')
+                
+                model = analyze(tmpdir)
+        
+        html = render_html(model, "Hostile Test")
+        
+        # Assert non-empty
+        self.assertNotEqual(html, "")
+        
+        # Parse HTML and collect all attributes
+        class AttributeCollector(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.attributes = []
+            
+            def handle_starttag(self, tag, attrs):
+                self.attributes.extend(attrs)
+        
+        collector = AttributeCollector()
+        collector.feed(html)
+        
+        # Check no attribute is named "onmouseover"
+        attr_names = [name for name, value in collector.attributes]
+        self.assertNotIn('onmouseover', attr_names)
+        
+        # Check no attribute value contains '"' or "onmouseover"
+        for name, value in collector.attributes:
+            self.assertNotIn('"', value)
+            self.assertNotIn('onmouseover', value)
+        
+        # Check all id and href "#" values match pattern
+        anchor_pattern = re.compile(r'^#?mod-[A-Za-z0-9_-]+$')
+        for name, value in collector.attributes:
+            if name in ('id', 'href'):
+                if value.startswith('#') or value.startswith('mod-'):
+                    self.assertIsNotNone(anchor_pattern.match(value),
+                                       f"Anchor {value} doesn't match pattern")
+        
+        # Check raw HTML contains "&quot;" (the escaped quote)
+        self.assertIn('&quot;', html)
+    
+    def test_anchor_ids_unique(self):
+        """_anchor_ids generates unique IDs for similar names."""
+        ids = _anchor_ids(["a.b", "a-b", "a_b"])
+        
+        # Should have 3 different IDs
+        self.assertEqual(len(ids), 3)
+        self.assertEqual(len(set(ids.values())), 3)
+        
+        # All should match the pattern
+        pattern = re.compile(r'^mod-[A-Za-z0-9_-]+$')
+        for anchor_id in ids.values():
+            self.assertIsNotNone(pattern.match(anchor_id))
+    
+    def test_summary_singular_plural(self):
+        """Summary uses singular forms for count of 1."""
+        # Create model with exactly 1 package and 1 class
+        model = {
+            'files_scanned': 1,
+            'packages': ['pkg'],
+            'modules': {
+                'pkg': {
+                    'path': 'pkg/__init__.py',
+                    'is_package': True,
+                    'docstring': '',
+                    'classes': [
+                        {
+                            'name': 'MyClass',
+                            'bases': [],
+                            'docstring': '',
+                            'methods': []
+                        }
+                    ],
+                    'functions': [],
+                    'imports': [],
+                    'has_main_guard': False
+                }
+            },
+            'entry_points': [],
+            'tests': [],
+            'unresolved': [],
+            'parse_errors': []
+        }
+        
+        lines = summary(model)
+        
+        # Assert non-empty
+        self.assertNotEqual(lines, [])
+        
+        summary_text = ' '.join(lines)
+        
+        # Check singular forms
+        self.assertIn('1 module', summary_text)
+        self.assertIn('1 package', summary_text)
+        self.assertIn('1 class', summary_text)
+        
+        # Check no plural forms for count of 1
+        self.assertNotIn('1 modules', summary_text)
+        self.assertNotIn('1 packages', summary_text)
+        self.assertNotIn('1 classes', summary_text)
 
 
 if __name__ == '__main__':

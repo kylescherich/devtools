@@ -1,6 +1,7 @@
 """Generate reports from analyzer model."""
 
 import html
+import re
 from collections import defaultdict
 
 
@@ -18,6 +19,54 @@ def _escape_markdown(s):
 def _escape_html(s):
     """Escape for HTML output."""
     return html.escape(s, quote=True)
+
+
+def _pluralize(count, singular, plural=None):
+    """Return count with singular or plural form.
+    
+    Args:
+        count: The count
+        singular: Singular form (e.g., "package")
+        plural: Plural form (defaults to singular + "s")
+    
+    Returns:
+        str: e.g., "1 package" or "2 packages"
+    """
+    if plural is None:
+        plural = singular + 's'
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _anchor_ids(names):
+    """Generate unique, attribute-safe anchor IDs for module names.
+    
+    Args:
+        names: Iterable of module names
+    
+    Returns:
+        dict: {module_name: anchor_id}
+    """
+    ids = {}
+    used = set()
+    
+    for name in sorted(names):
+        # Start with "mod-" + name with "." -> "-"
+        base_id = "mod-" + name.replace('.', '-')
+        
+        # Replace any character not in [A-Za-z0-9_-] with "_"
+        safe_id = re.sub(r'[^A-Za-z0-9_-]', '_', base_id)
+        
+        # Handle collisions
+        final_id = safe_id
+        counter = 2
+        while final_id in used:
+            final_id = f"{safe_id}-{counter}"
+            counter += 1
+        
+        ids[name] = final_id
+        used.add(final_id)
+    
+    return ids
 
 
 def _get_most_imported_internal(model):
@@ -84,8 +133,8 @@ def summary(model):
     total_functions = sum(len(m.get('functions', [])) for m in model['modules'].values())
     total_tests = len(model.get('tests', []))
     
-    lines.append(f"Found {num_modules} modules in {num_packages} packages.")
-    lines.append(f"Total: {total_classes} classes, {total_functions} functions, {total_tests} tests.")
+    lines.append(f"Found {_pluralize(num_modules, 'module')} in {_pluralize(num_packages, 'package')}.")
+    lines.append(f"Total: {_pluralize(total_classes, 'class', 'classes')}, {_pluralize(total_functions, 'function')}, {_pluralize(total_tests, 'test module')}.")
     
     # Entry points
     entry_points = model.get('entry_points', [])
@@ -105,7 +154,7 @@ def summary(model):
     # Untested modules
     untested = _get_untested_modules(model)
     if untested:
-        lines.append(f"{len(untested)} internal non-test modules have no inferred test targets.")
+        lines.append(f"{_pluralize(len(untested), 'internal non-test module')} have no statically inferred test target.")
     
     # Unresolved imports
     unresolved_counts = _count_unresolved_by_kind(model)
@@ -296,6 +345,8 @@ def render_markdown(model, title):
     # Entry points
     lines.append("## Entry points")
     lines.append("")
+    lines.append(_escape_markdown('Detected forms: if __name__ == "__main__" blocks, and [project.scripts] console scripts in the root pyproject.toml.'))
+    lines.append("")
     entry_points = model.get('entry_points', [])
     if entry_points:
         sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
@@ -375,8 +426,8 @@ def render_markdown(model, title):
                 lines.append(f"- {_escape_markdown(imp)}")
             lines.append("")
     
-    # Tests (inferred)
-    lines.append("## Tests \\(inferred\\)")
+    # Test modules (inferred targets)
+    lines.append("## Test modules \\(inferred targets\\)")
     lines.append("")
     
     tests = model.get('tests', [])
@@ -465,6 +516,7 @@ def render_html(model, title):
     
     # Entry points
     lines.append('<h2>Entry points</h2>')
+    lines.append(f'<p>{_escape_html("Detected forms: if __name__ == \"__main__\" blocks, and [project.scripts] console scripts in the root pyproject.toml.")}</p>')
     entry_points = model.get('entry_points', [])
     if entry_points:
         sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
@@ -486,8 +538,9 @@ def render_html(model, title):
     lines.append('<ul>')
     
     module_names = sorted(model['modules'].keys())
+    anchor_map = _anchor_ids(module_names)
     for mod_name in module_names:
-        anchor = 'mod-' + mod_name.replace('.', '-')
+        anchor = _escape_html(anchor_map[mod_name], quote=True)
         lines.append(f'<li><a href="#{anchor}">{_escape_html(mod_name)}</a></li>')
     
     lines.append('</ul>')
@@ -496,7 +549,7 @@ def render_html(model, title):
     # Module details
     for mod_name in module_names:
         mod_info = model['modules'][mod_name]
-        anchor = 'mod-' + mod_name.replace('.', '-')
+        anchor = _escape_html(anchor_map[mod_name], quote=True)
         
         lines.append(f'<h3 id="{anchor}">{_escape_html(mod_name)}</h3>')
         lines.append(f'<p><strong>Path:</strong> {_escape_html(mod_info["path"])}</p>')
@@ -559,8 +612,8 @@ def render_html(model, title):
                 lines.append(f'<li>{_escape_html(imp)}</li>')
             lines.append('</ul>')
     
-    # Tests (inferred)
-    lines.append('<h2>Tests (inferred)</h2>')
+    # Test modules (inferred targets)
+    lines.append('<h2>Test modules (inferred targets)</h2>')
     
     tests = model.get('tests', [])
     if tests:
