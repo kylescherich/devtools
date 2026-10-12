@@ -9,8 +9,9 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.setuptools]
-packages = ["repo_xray", "askdata"]
+packages = ["repo_xray", "askdata", "jsondiff"]
 
 [project.scripts]
 repo-xray = "repo_xray.cli:main"
 askdata = "askdata.cli:main"
+jsondiff = "jsondiff.cli:main"
