@@ -1,68 +1,31 @@
-# Claude Context
+# devtools — working notes for coding agents
 
-## Project Overview
+## Purpose
+devtools is a public repository of standalone command-line developer tools.
+Each tool is its own Python package in this repo, with its own console script.
+There is no shared framework between tools. First tool: `repo_xray` (`repo-xray`).
 
-**devtools** is a public repository of standalone CLI tools for software development workflows. Each tool is packaged independently with no shared framework. All tools use only the Python standard library and are designed to analyze repositories without executing or importing code from the target repository.
+## Layout
+- `repo_xray/` — the repo-xray package (`cli.py` holds `main(argv=None)`).
+- `tests/` — unittest suites; `tests/fixtures/` holds small fixture packages.
+- `pyproject.toml` — setuptools build, console scripts, no dependencies.
+- `HANDOFF.md` — current status and the next tasks.
 
-## Repository Structure
+## How to test
+Run from the repo root:
 
-```
-devtools/
-├── repo_xray/          # Repository analysis and documentation tool
-│   ├── __init__.py
-│   ├── __main__.py
-│   └── cli.py
-├── tests/              # Test suite
-│   ├── __init__.py
-│   └── test_cli.py
-├── pyproject.toml      # Build configuration
-└── .gitignore
-```
+    python3 -m unittest discover -v
 
-## Development Principles
+## Hard rules for repo_xray (BRIEF-DEVWS-015)
+- Standard library only; analysis uses ast. Never executes or imports code from the target repo.
+- Read-only on the target: never write inside it; --output defaults to the current directory and is refused if it resolves inside the target.
+- Never follows symlinks; skips .git, virtualenvs and __pycache__; never reads or lists dotfiles or config/secret-shaped files (.env*, *.key, *.pem, secrets*). Contents of *.toml, *.ini, *.cfg, *.json, *.yaml are never read, except pyproject.toml for its console-scripts table only. Only Python sources are parsed.
+- HTML-escape every source-derived string. Reports contain names, signatures and first docstring lines only, never full source or string literals.
+- Resolve relative imports against the package; list unresolved/dynamic imports (importlib, __import__, star imports, imports inside try) in an "Unresolved / dynamic" section, never guess.
+- --max-files guard, default 2000, with a clear message. Exit codes: 0 ok, 2 usage, 3 target unreadable or too large.
+- Every test asserts its output is non-empty before checking content.
 
-1. **Standalone Tools**: Each tool is a separate package with its own namespace
-2. **Standard Library Only**: No external dependencies; pure Python stdlib
-3. **Safe Analysis**: Tools never execute or import code from analyzed repositories
-4. **Simple Testing**: Tests run with `python3 -m unittest discover -v`
-
-## Current Tools
-
-### repo-xray
-
-A repository analysis tool that generates documentation and visualizations of repository structure.
-
-**Status**: Bootstrap complete, core functionality pending
-
-**Usage**:
-```bash
-repo-xray <path> [--output FILE] [--format html|md] [--max-files N]
-```
-
-## Testing
-
-Run all tests:
-```bash
-python3 -m unittest discover -v
-```
-
-Run specific test:
-```bash
-python3 -m unittest tests.test_cli
-```
-
-## Installation
-
-Development install:
-```bash
-pip install -e .
-```
-
-## Contributing
-
-When adding new tools:
-- Create a new package directory (e.g., `tool_name/`)
-- Add entry point in `pyproject.toml`
-- Use only standard library
-- Never execute target repository code
-- Add comprehensive tests
+## Working style
+- Small diffs, one feature per step; run the tests after every change.
+- Report real command output; never claim a pass without it.
+- Work for tasks 2-5 happens on branch devtools/repo-xray-mvp, merged by PR.

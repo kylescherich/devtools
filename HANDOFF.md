@@ -1,54 +1,16 @@
-# Handoff Document
+# HANDOFF — devtools
 
-## Current Status
+## Status
+- BRIEF-DEVWS-015 task 1 (bootstrap) done: package `repo_xray`, console script `repo-xray`, CLI prints usage and exits 2, one unittest.
+- No analysis code yet.
 
-**BRIEF-DEVWS-015 Task 1**: ✅ Complete
+## Next tasks (BRIEF-DEVWS-015, branch devtools/repo-xray-mvp)
+2. Analyzer: file walk + ast extraction into a plain dict model (packages, modules, entry points, classes, functions with signatures and first docstring line, imports). Fixture package under tests/fixtures/ covering relative imports, a star import, an importlib call, a class with methods, and a test file that imports two modules.
+3. Report: Markdown and single-file HTML renderers from the model; inline-SVG module dependency graph (simple layered layout, no external assets); escaping test with a fixture whose docstring contains <script>.
+4. CLI + end-to-end: `repo-xray <path> --output <file> [--format html|md] [--max-files N]`; exit 0 ok, 2 usage, 3 target unreadable or too large; e2e test on the fixture and on devtools itself (output parses with html.parser and contains the fixture module names).
+5. Acceptance runs on powerplan and pharmacy-rag, read-only; git status of both unchanged.
 
-Bootstrap of devtools repository is complete with the following structure:
-- Build configuration (pyproject.toml) with setuptools backend
-- repo_xray package with CLI entry point
-- Basic argument parsing (path, --output, --format, --max-files)
-- Test infrastructure with unittest
-- Documentation files (CLAUDE.md, this file)
+Then: PR from devtools/repo-xray-mvp; Kyle merges.
 
-The CLI currently returns a "not implemented yet" message and exit code 2.
-
-## Next Steps
-
-**BRIEF-DEVWS-015 Task 2**: Implement repository file discovery
-- Walk the target repository directory tree
-- Respect .gitignore patterns
-- Apply --max-files limit
-- Handle errors gracefully (missing paths, permission issues)
-
-**BRIEF-DEVWS-015 Task 3**: Implement file content reading and categorization
-- Read file contents safely (text vs binary detection)
-- Categorize files by type/extension
-- Build internal data structure for report generation
-- Handle encoding issues
-
-**BRIEF-DEVWS-015 Task 4**: Implement HTML report generation
-- Generate structured HTML output with repository overview
-- Include file listings by category
-- Add basic styling for readability
-- Write to --output or stdout
-
-**BRIEF-DEVWS-015 Task 5**: Implement Markdown report generation
-- Generate Markdown format as alternative to HTML
-- Maintain same information structure
-- Ensure proper formatting for common Markdown viewers
-
-## Testing Strategy
-
-Each task should include:
-- Unit tests for core functionality
-- Integration tests with sample repository structures
-- Error case handling tests
-- Tests run via `python3 -m unittest discover -v`
-
-## Notes
-
-- All functionality must use standard library only
-- Never execute or import code from analyzed repositories
-- Handle edge cases: empty repos, binary files, symlinks, permission errors
-- Keep memory usage reasonable for large repositories
+## Rules
+See CLAUDE.md "Hard rules for repo_xray". Tests: python3 -m unittest discover -v
