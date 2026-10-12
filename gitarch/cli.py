@@ -1,9 +1,12 @@
 """Command line for gitarch. Everything printed passes through _redact."""
 import argparse
+import os
 import sys
 
+from gitarch import history
 from gitarch._redact import redact
 from gitarch.gitcmd import DEFAULT_TIMEOUT, Git, GitError, UsageError, check_rev
+from gitarch.report import FORMATS, Report, render
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -42,6 +45,13 @@ def _positive(value):
     return number
 
 
+def _days(value):
+    number = int(value)
+    if number <= 0:
+        raise argparse.ArgumentTypeError("must be > 0")
+    return number
+
+
 def _build_parser():
     parser = _Parser(prog="gitarch", epilog=EPILOG,
                      formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -55,6 +65,21 @@ def _build_parser():
     parser.add_argument("--path", metavar="PATH",
                         help="only this file or directory (a file's renames "
                              "are followed)")
+    parser.add_argument("--format", choices=FORMATS, default="text",
+                        help="report format (default: text)")
+    parser.add_argument("--recent", type=_days, default=history.RECENT_DAYS,
+                        metavar="DAYS",
+                        help=f"recent hotspots cover the DAYS before the newest "
+                             f"analysed commit (default: {history.RECENT_DAYS})")
+    parser.add_argument("--authors", action="store_true",
+                        help="list author names with commit counts (e-mails never)")
+    parser.add_argument("--messages", action="store_true",
+                        help="show commit subjects (first line, at most "
+                             f"{history.SUBJECT_CHARS} characters, redacted)")
+    parser.add_argument("--diffs", action="store_true",
+                        help=f"with --path: diffs of the newest {history.DIFF_COMMITS} "
+                             f"commits, at most {history.DIFF_LINES} lines each, "
+                             "redacted; binary diffs skipped")
     parser.add_argument("--timeout", type=_positive, default=DEFAULT_TIMEOUT,
                         metavar="SECONDS",
                         help=f"per git call timeout (default: {DEFAULT_TIMEOUT})")
@@ -84,9 +109,17 @@ def main(argv=None):
         check_rev(args.rev)
     except UsageError as exc:
         return _fail(str(exc), EXIT_USAGE)
+    if args.diffs and args.path is None:
+        return _fail("--diffs requires --path", EXIT_USAGE)
+    git = Git(args.repo, timeout=args.timeout)
     try:
-        sha = Git(args.repo, timeout=args.timeout).resolve(args.rev)
+        model = history.build(git, args.rev, path=args.path, recent_days=args.recent,
+                              authors=args.authors)
+        subjects = history.subjects(git, model) if args.messages else {}
+        diffs = history.diffs(git, model) if args.diffs else None
     except GitError as exc:
         return _fail(str(exc), EXIT_GIT)
-    _write(sys.stdout, f"gitarch: {args.rev} = {sha}; report not implemented yet\n")
+    name = os.path.basename(os.path.abspath(args.repo)) or "/"
+    _write(sys.stdout, render(Report(name, model, args.messages, diffs, subjects),
+                              args.format))
     return EXIT_OK

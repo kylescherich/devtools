@@ -2,7 +2,9 @@
 timelines, hotspots and activity.
 
 The log is read once (--topo-order, reversed here to oldest first; git
-cannot --follow with --reverse), with -z --raw --numstat -M. Commit messages are never requested. Author e-mails are read
+cannot --follow with --reverse), with -z --raw --numstat -M. Commit messages
+are not part of it: subjects() reads only subject lines, and only when the
+report asks for them (--messages). Author e-mails are read
 only to count distinct authors and are never kept; author names are kept
 only with authors=True. Merge commits carry no diff (git log's default), so
 they count as merges and never as file changes.
@@ -14,10 +16,16 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
+from gitarch._redact import redact
 from gitarch.gitcmd import GitError, rev_args
 
 TOP = 15
 RECENT_DAYS = 90
+SUBJECT_CHARS = 120
+LATEST = 20            # commits listed with --messages when there is no --path
+PATH_COMMITS = 200     # commits listed for --path
+DIFF_COMMITS = 10
+DIFF_LINES = 200
 MONTHLY_AFTER_DAYS = 365
 _FORMAT = "--format=tformat:%x1e%H%x1f%P%x1f%ct%x1f%aE%x1f%aN"
 _NUMSTAT = re.compile(r"(\d+|-)\t(\d+|-)\t(.*)", re.DOTALL)
@@ -72,6 +80,24 @@ class FileHistory:
 
 
 @dataclass
+class CommitSummary:
+    sha: str
+    date: datetime
+    added: int | None          # None when a binary file changed
+    deleted: int | None
+    merge: bool
+
+
+@dataclass
+class Diff:
+    sha: str
+    date: datetime
+    lines: list                # redacted diff lines, at most DIFF_LINES
+    more: int                  # lines left out
+    binary: int                # binary file diffs skipped
+
+
+@dataclass
 class Overview:
     rev: str
     sha: str
@@ -112,6 +138,8 @@ class History:
     activity_unit: str             # "week" or "month"
     activity: list                 # (label, commits)
     authors: list | None           # (name, commits) with authors=True, else None
+    commits: list                  # CommitSummary, newest first
+    aliases: list                  # --path and its earlier names (followed renames)
 
 
 def _utc(ts):
@@ -281,6 +309,27 @@ def _path_args(git, sha, path):
     return [], ["--", path], False
 
 
+def _summary(commit):
+    added = deleted = 0
+    for ch in commit.changes:
+        if ch.added is None or ch.deleted is None:
+            added = deleted = None
+        elif added is not None:
+            added += ch.added
+            deleted += ch.deleted
+    return CommitSummary(commit.sha, _utc(commit.ts), added, deleted, commit.is_merge)
+
+
+def _aliases(path, followed, files, deleted):
+    if path is None:
+        return []
+    names = {path.removeprefix("./").rstrip("/")}
+    if followed:
+        for record in files + deleted:
+            names |= {r.old for r in record.renames} | {r.new for r in record.renames}
+    return sorted(names)
+
+
 def build(git, rev="HEAD", *, path=None, recent_days=RECENT_DAYS, authors=False):
     """The History of rev (optionally only path) in the repository of git."""
     sha = git.resolve(rev)
@@ -305,4 +354,48 @@ def build(git, rev="HEAD", *, path=None, recent_days=RECENT_DAYS, authors=False)
         names = sorted(tally.items(), key=lambda kv: (-kv[1], kv[0]))
     return History(overview, path, followed, files, deleted,
                    _hotspots(touches), _hotspots(touches, recent_days),
-                   unit, activity, names)
+                   unit, activity, names, [_summary(c) for c in reversed(commits)],
+                   _aliases(path, followed, files, deleted))
+
+
+def subjects(git, model):
+    """{sha: subject} for the commits a report lists: the first line only,
+    at most SUBJECT_CHARS characters, redacted. Read with an explicit
+    format; the commit body is never requested."""
+    limit = PATH_COMMITS if model.path is not None else LATEST
+    options, pathspec, _ = _path_args(git, model.overview.sha, model.path)
+    data = git.run("log", "-z", "--topo-order", f"--max-count={limit}",
+                   "--format=tformat:%H%x1f%s", *options,
+                   *rev_args(model.overview.sha), *pathspec)
+    out = {}
+    for record in _decode(data).split("\0"):
+        sha, sep, subject = record.lstrip("\n").partition("\x1f")
+        if sep:
+            out[sha] = redact(subject.splitlines()[0] if subject else "")[:SUBJECT_CHARS]
+    return out
+
+
+_BINARY = re.compile(r"Binary files .* differ")
+
+
+def diffs(git, model):
+    """Diffs of the newest DIFF_COMMITS non-merge commits of a --path model,
+    limited to the path and its earlier names: at most DIFF_LINES lines per
+    commit, binary file diffs skipped and counted, every line redacted."""
+    if model.path is None:
+        raise ValueError("diffs need a path")
+    out = []
+    for commit in [c for c in model.commits if not c.merge][:DIFF_COMMITS]:
+        data = git.run("show", "-p", "-M", "--format=tformat:",
+                       *rev_args(commit.sha), "--", *model.aliases)
+        lines, binary = [], 0
+        for line in redact(_decode(data)).split("\n"):
+            if _BINARY.fullmatch(line):
+                binary += 1
+            elif line or lines:
+                lines.append(line)
+        while lines and not lines[-1]:
+            lines.pop()
+        out.append(Diff(commit.sha, commit.date, lines[:DIFF_LINES],
+                        max(0, len(lines) - DIFF_LINES), binary))
+    return out
