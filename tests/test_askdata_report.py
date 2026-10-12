@@ -31,61 +31,133 @@ class TestReports(unittest.TestCase):
     
     def test_html_only_safe_tags(self):
         """HTML output only contains safe tags."""
+        allowed_tags = {
+            'html', 'head', 'meta', 'title', 'style', 'body', 'header',
+            'section', 'h1', 'h2', 'h3', 'p', 'table', 'thead', 'tbody',
+            'tr', 'th', 'td', 'ul', 'li', 'a', 'code', 'span', 'div',
+            'strong', 'br'
+        }
+        
+        class TagCollector(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.tags = set()
+            
+            def handle_starttag(self, tag, attrs):
+                self.tags.add(tag)
+        
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.csvinspect import inspect_csv
+            from askdata.sqliteinspect import inspect_sqlite
+            
+            # Test clean_csv
             path = clean_csv(tmpdir)
             model = inspect_csv(path)
-            
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
-            
-            class TagCollector(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.tags = set()
-                
-                def handle_starttag(self, tag, attrs):
-                    self.tags.add(tag)
             
             parser = TagCollector()
             parser.feed(html_output)
-            
-            allowed_tags = {
-                'html', 'head', 'meta', 'title', 'style', 'body', 'header',
-                'section', 'h1', 'h2', 'h3', 'p', 'table', 'thead', 'tbody',
-                'tr', 'th', 'td', 'ul', 'li', 'a', 'code', 'span', 'div'
-            }
-            
             self.assertTrue(parser.tags.issubset(allowed_tags),
-                          f"Found disallowed tags: {parser.tags - allowed_tags}")
-    
-    def test_html_anchors_internal_only(self):
-        """All <a href> attributes start with #."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            from askdata.sqliteinspect import inspect_sqlite
-            path = fk_db(tmpdir)
-            model = inspect_sqlite(path)
+                          f"clean_csv: Found disallowed tags: {parser.tags - allowed_tags}")
             
+            # Test messy_csv
+            path = messy_csv(tmpdir)
+            model = inspect_csv(path)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
-            class HrefCollector(HTMLParser):
-                def __init__(self):
-                    super().__init__()
-                    self.hrefs = []
-                
-                def handle_starttag(self, tag, attrs):
-                    if tag == 'a':
-                        for name, value in attrs:
-                            if name == 'href':
-                                self.hrefs.append(value)
+            parser = TagCollector()
+            parser.feed(html_output)
+            self.assertTrue(parser.tags.issubset(allowed_tags),
+                          f"messy_csv: Found disallowed tags: {parser.tags - allowed_tags}")
+            
+            # Test fk_db
+            path = fk_db(tmpdir)
+            model = inspect_sqlite(path)
+            html_output = render_html(model)
+            self.assertNotEqual(html_output, "")
+            
+            parser = TagCollector()
+            parser.feed(html_output)
+            self.assertTrue(parser.tags.issubset(allowed_tags),
+                          f"fk_db: Found disallowed tags: {parser.tags - allowed_tags}")
+            
+            # Test hostile_db
+            path = hostile_db(tmpdir)
+            model = inspect_sqlite(path)
+            html_output = render_html(model)
+            self.assertNotEqual(html_output, "")
+            
+            parser = TagCollector()
+            parser.feed(html_output)
+            self.assertTrue(parser.tags.issubset(allowed_tags),
+                          f"hostile_db: Found disallowed tags: {parser.tags - allowed_tags}")
+    
+    def test_html_anchors_internal_only(self):
+        """All <a href> attributes start with #."""
+        class HrefCollector(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.hrefs = []
+            
+            def handle_starttag(self, tag, attrs):
+                if tag == 'a':
+                    for name, value in attrs:
+                        if name == 'href':
+                            self.hrefs.append(value)
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from askdata.csvinspect import inspect_csv
+            from askdata.sqliteinspect import inspect_sqlite
+            
+            # Test clean_csv
+            path = clean_csv(tmpdir)
+            model = inspect_csv(path)
+            html_output = render_html(model)
+            self.assertNotEqual(html_output, "")
             
             parser = HrefCollector()
             parser.feed(html_output)
-            
             for href in parser.hrefs:
                 self.assertTrue(href.startswith('#'),
-                              f"Found non-internal href: {href}")
+                              f"clean_csv: Found non-internal href: {href}")
+            
+            # Test messy_csv
+            path = messy_csv(tmpdir)
+            model = inspect_csv(path)
+            html_output = render_html(model)
+            self.assertNotEqual(html_output, "")
+            
+            parser = HrefCollector()
+            parser.feed(html_output)
+            for href in parser.hrefs:
+                self.assertTrue(href.startswith('#'),
+                              f"messy_csv: Found non-internal href: {href}")
+            
+            # Test fk_db
+            path = fk_db(tmpdir)
+            model = inspect_sqlite(path)
+            html_output = render_html(model)
+            self.assertNotEqual(html_output, "")
+            
+            parser = HrefCollector()
+            parser.feed(html_output)
+            for href in parser.hrefs:
+                self.assertTrue(href.startswith('#'),
+                              f"fk_db: Found non-internal href: {href}")
+            
+            # Test hostile_db
+            path = hostile_db(tmpdir)
+            model = inspect_sqlite(path)
+            html_output = render_html(model)
+            self.assertNotEqual(html_output, "")
+            
+            parser = HrefCollector()
+            parser.feed(html_output)
+            for href in parser.hrefs:
+                self.assertTrue(href.startswith('#'),
+                              f"hostile_db: Found non-internal href: {href}")
     
     def test_clean_csv_warnings_none(self):
         """Clean CSV shows 'none' in warnings section for all formats."""
@@ -110,7 +182,7 @@ class TestReports(unittest.TestCase):
             self.assertIn('<p>none</p>', html_output)
     
     def test_clean_csv_html_tok_classes(self):
-        """Clean CSV HTML contains 1-5 distinct tok-<n> classes."""
+        """Clean CSV HTML contains 1-5 distinct tok-<n> values in data, none in style."""
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.csvinspect import inspect_csv
             path = clean_csv(tmpdir)
@@ -119,9 +191,10 @@ class TestReports(unittest.TestCase):
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
-            # Find all tok-N classes
+            # Find all tok-N patterns
             import re
-            tok_classes = set(re.findall(r'tok-(\d+)', html_output))
+            tok_matches = re.findall(r'tok-(\d+)', html_output)
+            tok_classes = set(tok_matches)
             
             # Should have 1-5 distinct values
             self.assertGreaterEqual(len(tok_classes), 1)
@@ -130,6 +203,13 @@ class TestReports(unittest.TestCase):
             # All should be in range 1-5
             for tok in tok_classes:
                 self.assertIn(tok, {'1', '2', '3', '4', '5'})
+            
+            # Style block should not contain "tok-"
+            style_start = html_output.find('<style>')
+            style_end = html_output.find('</style>')
+            if style_start != -1 and style_end != -1:
+                style_block = html_output[style_start:style_end]
+                self.assertNotIn('tok-', style_block)
     
     def test_messy_csv_malformed_and_encoding(self):
         """Messy CSV shows malformed lines and encoding fallback in all formats."""
@@ -200,6 +280,53 @@ class TestReports(unittest.TestCase):
             self.assertNotEqual(html_output, "")
             self.assertIn('orders.customer_id -> customers.id', html_output)
             self.assertIn('idx_orders_customer', html_output)
+    
+    def test_newline_and_bidi_escaping(self):
+        """CSV with newline and bidi control in quoted cell is escaped in terminal and md."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create CSV with newline and bidi control in quoted value
+            csv_path = Path(tmpdir) / "special.csv"
+            with open(csv_path, 'w', encoding='utf-8', newline='') as f:
+                f.write('name,value\n')
+                f.write('"test\nline",123\n')
+                f.write('"\u202eRTL",456\n')
+            
+            from askdata.csvinspect import inspect_csv
+            model = inspect_csv(csv_path)
+            
+            terminal_output = render_terminal(model)
+            self.assertNotEqual(terminal_output, "")
+            
+            # Find the samples section for the name column
+            # Should contain escaped newline, not raw newline
+            self.assertIn(r'\x0a', terminal_output)
+            # Should not contain raw newline in the value
+            lines = terminal_output.split('\n')
+            for line in lines:
+                if 'Samples:' in line and 'test' in line:
+                    self.assertNotIn('test\nline', line)
+            
+            # Should contain escaped bidi control
+            self.assertIn(r'\u202e', terminal_output)
+            # Should not contain raw bidi control
+            self.assertNotIn('\u202e', terminal_output)
+            
+            md_output = render_md(model)
+            self.assertNotEqual(md_output, "")
+            
+            # Should contain escaped newline
+            self.assertIn(r'\x0a', md_output)
+            # Should not contain raw newline in table cell
+            md_lines = md_output.split('\n')
+            for line in md_lines:
+                if line.startswith('|') and 'test' in line:
+                    # This is a table row - should not have embedded newline
+                    self.assertEqual(line.count('\n'), 0)
+            
+            # Should contain escaped bidi control
+            self.assertIn(r'\u202e', md_output)
+            # Should not contain raw bidi control
+            self.assertNotIn('\u202e', md_output)
 
 
 if __name__ == '__main__':

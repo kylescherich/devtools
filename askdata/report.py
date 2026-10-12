@@ -5,15 +5,19 @@ import unicodedata
 
 
 def _escape_terminal(s):
-    """Escape control characters for terminal output.
+    r"""Escape control characters for terminal output.
     
-    Replaces control characters (Unicode category Cc except newline) with \xNN form.
+    Replaces control characters (Unicode category Cc) and bidi controls with escape sequences.
     """
     s = str(s)
     result = []
+    bidi_controls = {0x202A, 0x202B, 0x202C, 0x202D, 0x202E, 0x2066, 0x2067, 0x2068, 0x2069}
     for char in s:
-        if unicodedata.category(char) == 'Cc' and char != '\n':
-            result.append(f'\\x{ord(char):02x}')
+        code = ord(char)
+        if unicodedata.category(char) == 'Cc':
+            result.append(f'\\x{code:02x}')
+        elif code in bidi_controls:
+            result.append(f'\\u{code:04x}')
         else:
             result.append(char)
     return ''.join(result)
@@ -392,11 +396,6 @@ def render_html(model):
     lines.append('th, td { border: 1px solid #ddd; padding: 0.5em; text-align: left; }')
     lines.append('th { background: #f5f5f5; font-weight: bold; }')
     lines.append('code { background: #f5f5f5; padding: 0.2em 0.4em; border-radius: 3px; }')
-    lines.append('.tok-1 { color: #0066cc; }')
-    lines.append('.tok-2 { color: #009900; }')
-    lines.append('.tok-3 { color: #cc6600; }')
-    lines.append('.tok-4 { color: #990099; }')
-    lines.append('.tok-5 { color: #cc0000; }')
     lines.append('ul { line-height: 1.6; }')
     lines.append('</style>')
     lines.append('</head>')
@@ -483,14 +482,11 @@ def render_html(model):
             lines.append('</tr></thead>')
             lines.append('<tbody>')
             
-            # Assign tok classes to columns (cycle through 1-5)
-            for idx, col in enumerate(columns):
-                tok_class = f'tok-{(idx % 5) + 1}'
-                
+            for col in columns:
                 lines.append('<tr>')
                 
                 # Name
-                lines.append(f'<td><code class="{tok_class}">{_escape_html(col["name"])}</code></td>')
+                lines.append(f'<td><code>{_escape_html(col["name"])}</code></td>')
                 
                 # Type
                 if col['type'] == 'mixed':
