@@ -224,26 +224,31 @@ def _render_svg_graph(model):
         '</defs>',
     ]
     
-    # Draw edges first (so they appear behind nodes)
-    for mod_name, mod_info in sorted(model['modules'].items()):
+    # Collect unique edges (source, target) pairs
+    edges = set()
+    for mod_name, mod_info in model['modules'].items():
         if mod_name not in positions:
             continue
-        x1, y1 = positions[mod_name]
-        cx1 = x1 + node_width / 2
-        cy1 = y1 + node_height / 2
-        
         for imp in mod_info.get('imports', []):
             if imp.get('internal'):
                 target = imp['target']
                 if target in positions:
-                    x2, y2 = positions[target]
-                    cx2 = x2 + node_width / 2
-                    cy2 = y2 + node_height / 2
-                    
-                    svg_parts.append(
-                        f'<line x1="{cx1}" y1="{cy1}" x2="{cx2}" y2="{cy2}" '
-                        f'stroke="#666" stroke-width="1" marker-end="url(#arrowhead)" />'
-                    )
+                    edges.add((mod_name, target))
+    
+    # Draw edges first (so they appear behind nodes)
+    for source, target in sorted(edges):
+        x1, y1 = positions[source]
+        cx1 = x1 + node_width / 2
+        cy1 = y1 + node_height / 2
+        
+        x2, y2 = positions[target]
+        cx2 = x2 + node_width / 2
+        cy2 = y2 + node_height / 2
+        
+        svg_parts.append(
+            f'<line x1="{cx1}" y1="{cy1}" x2="{cx2}" y2="{cy2}" '
+            f'stroke="#666" stroke-width="1" marker-end="url(#arrowhead)" />'
+        )
     
     # Draw nodes
     for mod in sorted(positions.keys()):

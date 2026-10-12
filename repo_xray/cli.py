@@ -1,5 +1,9 @@
 import argparse
 import sys
+from pathlib import Path
+
+from repo_xray.analyzer import analyze, TargetError, TooManyFiles
+from repo_xray.report import render_html, render_markdown
 
 
 def main(argv=None):
@@ -11,5 +15,46 @@ def main(argv=None):
     
     args = parser.parse_args(argv)
     
-    print("repo-xray: not implemented yet", file=sys.stderr)
-    return 2
+    # Resolve target path
+    target = Path(args.path).resolve()
+    
+    # Determine output path
+    if args.output:
+        output_path = Path(args.output).resolve()
+    else:
+        extension = "html" if args.format == "html" else "md"
+        output_path = Path.cwd() / f"{target.name}-xray.{extension}"
+    
+    # Check if output is inside target
+    if output_path == target or output_path.is_relative_to(target):
+        print("repo-xray: --output must be outside the target", file=sys.stderr)
+        return 2
+    
+    # Analyze the repository
+    try:
+        model = analyze(target, max_files=args.max_files)
+    except TooManyFiles as e:
+        print(f"repo-xray: {e} (use --max-files to increase limit)", file=sys.stderr)
+        return 3
+    except TargetError as e:
+        print(f"repo-xray: {e}", file=sys.stderr)
+        return 3
+    
+    # Render the report
+    title = target.name
+    if args.format == "html":
+        content = render_html(model, title)
+    else:
+        content = render_markdown(model, title)
+    
+    # Write the output file
+    try:
+        output_path.write_text(content, encoding='utf-8')
+    except OSError as e:
+        print(f"repo-xray: {e}", file=sys.stderr)
+        return 2
+    
+    # Success
+    num_modules = len(model['modules'])
+    print(f"repo-xray: wrote {output_path} ({num_modules} modules)")
+    return 0
