@@ -264,7 +264,9 @@ class TestE2E(unittest.TestCase):
             tmpdir = Path(tmpdir)
             
             # Create test package
-            pkg_dir = tmpdir / 'pkg'
+            repo_dir = tmpdir / 'repo'
+            repo_dir.mkdir()
+            pkg_dir = repo_dir / 'pkg'
             pkg_dir.mkdir()
             
             (pkg_dir / '__init__.py').write_text('', encoding='utf-8')
@@ -286,7 +288,7 @@ def f():
             
             # Test with --no-docstrings (HTML)
             output_html = tmpdir / 'out_no_doc.html'
-            result = self._run_cli([str(pkg_dir), '--output', str(output_html), '--no-docstrings'], cwd=tmpdir)
+            result = self._run_cli([str(repo_dir), '--output', str(output_html), '--no-docstrings'], cwd=tmpdir)
             
             self.assertEqual(result.returncode, 0)
             
@@ -302,7 +304,7 @@ def f():
             
             # Test with --no-docstrings (Markdown)
             output_md = tmpdir / 'out_no_doc.md'
-            result = self._run_cli([str(pkg_dir), '--output', str(output_md), '--format', 'md', '--no-docstrings'], cwd=tmpdir)
+            result = self._run_cli([str(repo_dir), '--output', str(output_md), '--format', 'md', '--no-docstrings'], cwd=tmpdir)
             
             self.assertEqual(result.returncode, 0)
             
@@ -318,7 +320,7 @@ def f():
             
             # Test WITHOUT --no-docstrings (positive control)
             output_with_doc = tmpdir / 'out_with_doc.html'
-            result = self._run_cli([str(pkg_dir), '--output', str(output_with_doc)], cwd=tmpdir)
+            result = self._run_cli([str(repo_dir), '--output', str(output_with_doc)], cwd=tmpdir)
             
             self.assertEqual(result.returncode, 0)
             

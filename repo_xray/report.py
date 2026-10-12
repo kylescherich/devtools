@@ -154,7 +154,9 @@ def summary(model):
     # Untested modules
     untested = _get_untested_modules(model)
     if untested:
-        lines.append(f"{_pluralize(len(untested), 'internal non-test module')} have no statically inferred test target.")
+        count = len(untested)
+        verb = "has" if count == 1 else "have"
+        lines.append(f"{_pluralize(count, 'internal non-test module')} {verb} no statically inferred test target.")
     
     # Unresolved imports
     unresolved_counts = _count_unresolved_by_kind(model)
