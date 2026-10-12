@@ -556,3 +556,36 @@ class TestAskdataCLI(unittest.TestCase):
             
             self.assertEqual(result.returncode, 0)
             self.assertIn("price", result.stdout)
+    
+    def test_frozen_flag_on_fk_db(self):
+        """Test --frozen flag on regular database."""
+        with tempfile.TemporaryDirectory() as input_dir:
+            with tempfile.TemporaryDirectory() as output_dir:
+                input_path = fk_db(input_dir)
+                output_path = Path(output_dir) / "report.html"
+                
+                exit_code, stdout, stderr = self._capture_main([
+                    "inspect", str(input_path), "--output", str(output_path),
+                    "--frozen"
+                ])
+                
+                self.assertEqual(exit_code, 0)
+                self.assertTrue(output_path.exists())
+    
+    def test_wal_without_shm_error(self):
+        """Test that WAL database without -shm gives exit code 3 with --frozen in stderr."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from tests.askdata_fixtures import wal_db
+            path, writer = wal_db(tmpdir)
+            writer.close()
+            
+            # Remove -shm file
+            shm_path = Path(str(path) + "-shm")
+            shm_path.unlink()
+            
+            exit_code, stdout, stderr = self._capture_main([
+                "inspect", str(path)
+            ])
+            
+            self.assertEqual(exit_code, 3)
+            self.assertIn("--frozen", stderr)

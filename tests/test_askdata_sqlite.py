@@ -433,5 +433,278 @@ class TestSQLiteInspect(unittest.TestCase):
                 )
 
 
+    def test_wal_sees_concurrent_commit(self):
+        """Test that a reader sees concurrent commits in WAL mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path, writer = wal_db(tmpdir)
+            
+            try:
+                # First inspection should see 10 rows
+                result1 = inspect_sqlite(path)
+                self.assertIsNotNone(result1)
+                tables_by_name = {t["name"]: t for t in result1["tables"]}
+                self.assertEqual(tables_by_name["t"]["row_count"], 10)
+                
+                # Writer inserts 5 more rows and commits
+                for i in range(10, 15):
+                    writer.execute("INSERT INTO t (v) VALUES (?)", (f"value_{i}",))
+                writer.commit()
+                
+                # Second inspection should see 15 rows
+                result2 = inspect_sqlite(path)
+                self.assertIsNotNone(result2)
+                tables_by_name = {t["name"]: t for t in result2["tables"]}
+                self.assertEqual(tables_by_name["t"]["row_count"], 15)
+                
+            finally:
+                writer.close()
+    
+    def test_wal_side_files_unchanged(self):
+        """Test that WAL side files are unchanged after inspection.
+        
+        Note: -shm holds SQLite reader marks and may change.
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            path, writer = wal_db(tmpdir)
+            
+            try:
+                # Compute hashes and sizes before
+                db_hash_before = self._compute_sha256(path)
+                wal_path = Path(str(path) + "-wal")
+                wal_hash_before = self._compute_sha256(wal_path)
+                shm_path = Path(str(path) + "-shm")
+                shm_size_before = shm_path.stat().st_size
+                listing_before = sorted([f.name for f in tmpdir.iterdir()])
+                
+                # Run inspection
+                inspect_sqlite(path)
+                
+                # Compute hashes and sizes after
+                db_hash_after = self._compute_sha256(path)
+                wal_hash_after = self._compute_sha256(wal_path)
+                shm_size_after = shm_path.stat().st_size
+                listing_after = sorted([f.name for f in tmpdir.iterdir()])
+                
+                # Database and WAL should be unchanged
+                self.assertEqual(db_hash_before, db_hash_after)
+                self.assertEqual(wal_hash_before, wal_hash_after)
+                # SHM size should be unchanged
+                self.assertEqual(shm_size_before, shm_size_after)
+                # Directory listing should be unchanged
+                self.assertEqual(listing_before, listing_after)
+                
+            finally:
+                writer.close()
+    
+    def test_wal_without_shm_refused(self):
+        """Test that WAL database without -shm access is refused unless frozen."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            path, writer = wal_db(tmpdir)
+            writer.close()
+            
+            # Remove -shm file
+            shm_path = Path(str(path) + "-shm")
+            shm_path.unlink()
+            
+            listing_before = sorted([f.name for f in tmpdir.iterdir()])
+            
+            # Should raise InspectError mentioning --frozen
+            with self.assertRaises(InspectError) as cm:
+                inspect_sqlite(path)
+            
+            self.assertIn("--frozen", str(cm.exception))
+            
+            # Directory listing should be unchanged
+            listing_after = sorted([f.name for f in tmpdir.iterdir()])
+            self.assertEqual(listing_before, listing_after)
+            
+            # With frozen=True, should work and see 10 rows
+            result = inspect_sqlite(path, frozen=True)
+            self.assertIsNotNone(result)
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            self.assertEqual(tables_by_name["t"]["row_count"], 10)
+            
+            # Directory listing should still be unchanged
+            listing_final = sorted([f.name for f in tmpdir.iterdir()])
+            self.assertEqual(listing_before, listing_final)
+    
+    def test_default_uri_has_no_immutable(self):
+        """Test that default URI does not include immutable=1."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            
+            real_connect = sqlite3.connect
+            calls = []
+            
+            def side_effect_wrapper(*args, **kwargs):
+                calls.append((args, kwargs))
+                return real_connect(*args, **kwargs)
+            
+            with unittest.mock.patch("askdata.sqliteinspect.sqlite3.connect", side_effect=side_effect_wrapper):
+                conn = open_readonly(path, frozen=False)
+                conn.close()
+            
+            self.assertEqual(len(calls), 1)
+            args, kwargs = calls[0]
+            
+            self.assertTrue(args[0].startswith("file:"))
+            self.assertIn("mode=ro", args[0])
+            self.assertNotIn("immutable=1", args[0])
+            self.assertTrue(kwargs.get("uri"))
+    
+    def test_frozen_uri_has_immutable(self):
+        """Test that frozen=True URI includes immutable=1."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            
+            real_connect = sqlite3.connect
+            calls = []
+            
+            def side_effect_wrapper(*args, **kwargs):
+                calls.append((args, kwargs))
+                return real_connect(*args, **kwargs)
+            
+            with unittest.mock.patch("askdata.sqliteinspect.sqlite3.connect", side_effect=side_effect_wrapper):
+                conn = open_readonly(path, frozen=True)
+                conn.close()
+            
+            self.assertEqual(len(calls), 1)
+            args, kwargs = calls[0]
+            
+            self.assertTrue(args[0].startswith("file:"))
+            self.assertIn("mode=ro", args[0])
+            self.assertIn("immutable=1", args[0])
+            self.assertTrue(kwargs.get("uri"))
+    
+    def test_ro_update_denied(self):
+        """Test that UPDATE is denied in read-only mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            conn = open_readonly(path)
+            
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("UPDATE customers SET name = 'test' WHERE id = 1")
+            
+            conn.close()
+    
+    def test_ro_delete_denied(self):
+        """Test that DELETE is denied in read-only mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            conn = open_readonly(path)
+            
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("DELETE FROM customers WHERE id = 1")
+            
+            conn.close()
+    
+    def test_ro_drop_denied(self):
+        """Test that DROP TABLE is denied in read-only mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            conn = open_readonly(path)
+            
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("DROP TABLE customers")
+            
+            conn.close()
+    
+    def test_ro_vacuum_denied(self):
+        """Test that VACUUM is denied in read-only mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            conn = open_readonly(path)
+            
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("VACUUM")
+            
+            conn.close()
+    
+    def test_ro_create_temp_denied(self):
+        """Test that CREATE TEMP TABLE is denied in read-only mode."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            conn = open_readonly(path)
+            
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("CREATE TEMP TABLE temp_test (id INTEGER)")
+            
+            conn.close()
+    
+    def test_ro_table_valued_pragma_denied(self):
+        """Test that table-valued pragmas are denied."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            conn = open_readonly(path)
+            
+            # pragma_journal_mode with argument should be denied
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("PRAGMA journal_mode")
+            
+            # pragma_function_list should be denied
+            with self.assertRaises(sqlite3.DatabaseError):
+                conn.execute("PRAGMA function_list")
+            
+            conn.close()
+    
+    def test_fts5_and_shadow_tables(self):
+        """Test that FTS5 tables work and shadow tables are listed."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fts_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            
+            # docs table should exist with 3 rows
+            self.assertIn("docs", tables_by_name)
+            self.assertEqual(tables_by_name["docs"]["row_count"], 3)
+            
+            # docs_data shadow table should be listed
+            self.assertIn("docs_data", tables_by_name)
+            
+            # Should not have "could not be read" warning for docs
+            warnings_text = " ".join(result["warnings"])
+            self.assertNotIn("docs: could not be read", warnings_text)
+    
+    def test_hostile_view_fails_cleanly(self):
+        """Test that hostile views fail cleanly without executing dangerous operations."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = hostile_view_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            
+            # t table should work fine with 1 row
+            self.assertIn("t", tables_by_name)
+            self.assertEqual(tables_by_name["t"]["row_count"], 1)
+            self.assertNotIn("error", tables_by_name["t"])
+            
+            # bad and bad2 views should have errors
+            self.assertIn("bad", tables_by_name)
+            self.assertIn("error", tables_by_name["bad"])
+            self.assertEqual(tables_by_name["bad"]["columns"], [])
+            
+            self.assertIn("bad2", tables_by_name)
+            self.assertIn("error", tables_by_name["bad2"])
+            self.assertEqual(tables_by_name["bad2"]["columns"], [])
+            
+            # Should have warnings for both
+            warnings_text = " ".join(result["warnings"])
+            self.assertIn("bad: could not be read", warnings_text)
+            self.assertIn("bad2: could not be read", warnings_text)
+            
+            # Verify dangerous file was not created
+            dangerous_path = Path("/tmp/askdata-should-not-exist")
+            self.assertFalse(dangerous_path.exists())
+
+
 if __name__ == '__main__':
     unittest.main()

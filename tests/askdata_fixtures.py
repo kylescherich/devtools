@@ -200,6 +200,84 @@ def fk_db(directory):
     return path
 
 
+def wal_db(directory):
+    """Create a SQLite database in WAL mode with an open writer.
+    
+    Returns tuple of (path, writer_connection).
+    The caller must close the writer connection.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "wal.db"
+    
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    
+    # Insert 10 rows and commit
+    for i in range(10):
+        conn.execute("INSERT INTO t (v) VALUES (?)", (f"value_{i}",))
+    conn.commit()
+    
+    # Return path and open connection
+    return path, conn
+
+
+def fts_db(directory):
+    """Create a SQLite database with FTS5 table and regular table.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "fts.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Create FTS5 table
+    conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body)")
+    conn.execute("INSERT INTO docs (body) VALUES ('first document')")
+    conn.execute("INSERT INTO docs (body) VALUES ('second document')")
+    conn.execute("INSERT INTO docs (body) VALUES ('third document')")
+    
+    # Create regular table
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t (x) VALUES (42)")
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def hostile_view_db(directory):
+    """Create a SQLite database with hostile views that try to execute dangerous operations.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "hostile_view.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Create regular table
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t (x) VALUES (1)")
+    
+    # Create hostile views
+    conn.execute("CREATE VIEW bad AS SELECT load_extension('x') AS y")
+    conn.execute("CREATE VIEW bad2 AS SELECT writefile('/tmp/askdata-should-not-exist', 'a') AS y")
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
 def empty_db(directory):
     """Create a valid SQLite database with no tables.
     
