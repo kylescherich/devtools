@@ -204,3 +204,81 @@ When several apply, the leftmost wins: 2 > 3 > 4 > 1 > 0.
 | 2 | usage error, including a refused `--output` or a `--bucket` over 2,000 buckets |
 | 3 | input missing, unreadable, invalid, a symlink, or over `--max-bytes` |
 | 4 | entries at ERROR or above (ERROR, ERR, CRITICAL, FATAL, ALERT, EMERG) |
+
+# gitarch
+
+Git Archaeologist: a read-only summary of a git repository's history. It
+shows which files and directories change most (by number of commits and by
+lines changed, all time and recently), when the repository was active, when
+each file was introduced, last changed and renamed, and which files were
+deleted. Standard library only; Python 3.11 and 3.12; needs `git` on PATH.
+
+## Usage
+
+```bash
+gitarch [REPO] [--rev REV] [--path PATH] [--format text|md|html]
+        [--recent DAYS] [--authors] [--messages] [--diffs]
+        [--output PATH [--force]] [--timeout SECONDS]
+```
+
+Examples (synthetic paths):
+
+```bash
+gitarch                                         # the repository in ., text on stdout
+gitarch ~/src/app --format html --output ~/reports/app.html
+gitarch ~/src/app --rev v1.2.0 --recent 30      # an older revision, 30-day hotspots
+gitarch ~/src/app --path src/core/db.py         # one file, followed across renames
+gitarch ~/src/app --path src/core/db.py --messages --diffs
+gitarch ~/src/app --authors                     # author names with commit counts
+```
+
+The report has the same sections in every format: a header (repository,
+revision and short hash, commits, merges, first and last commit date in
+UTC, author count, which of messages/diffs/authors are on, `redaction: on`),
+an overview sentence, hotspots (top 15 files and directories by changes and
+by churn, all time and for the `--recent` DAYS before the newest analysed
+commit, default 90), activity per ISO week (per month when the history
+spans more than a year), the file timeline and deleted files. `--path` adds
+the commits that touched the path. Reports are reproducible: the same
+repository and arguments give byte-identical output; the current date or
+time never appears.
+
+## Safety rules, in plain words
+
+- gitarch only reads. The only program it starts is `git`, without a shell,
+  with a fixed list of arguments, and only these read-only subcommands:
+  `rev-parse`, `log`, `show`, `diff-tree`, `ls-files`, `cat-file`.
+- A repository cannot make gitarch run its programs: hooks, the pager,
+  fsmonitor, external diff drivers, textconv filters and signature checks
+  (and so `gpg.program`) are switched off on every call, your global and
+  system git config are ignored, and any `GIT_*` environment variable is
+  removed before git starts.
+- Each git call has a timeout (60 s, `--timeout`) and an output cap of
+  100 MB.
+- `--rev` may not start with `-`, and git always reads it as a revision,
+  never as an option; `--path` is always passed as a path.
+- `--output` never writes inside the analysed repository (work tree or
+  `.git`), never through a symlink, and never over an existing file unless
+  you pass `--force`.
+
+## Privacy defaults
+
+- No commit messages, no diffs and no author names by default. Commit
+  subjects (first line only, at most 120 characters) appear only with
+  `--messages`; diffs only with `--path ... --diffs` (the newest 10 commits,
+  at most 200 lines each, binary diffs skipped); author names with commit
+  counts only with `--authors`. Author e-mail addresses are never shown.
+- Everything gitarch prints or writes passes through the same redaction as
+  Log Lens (see "What is redacted" above), with no way to turn it off.
+- File names, subjects and diff lines are escaped for the output format:
+  control characters as `\xNN`, bidi and line-separator characters as
+  `\uXXXX`; the HTML report has a strict Content-Security-Policy and no
+  scripts, links, images or event handlers.
+
+## Exit codes
+
+| code | meaning |
+| --- | --- |
+| 0 | ok |
+| 2 | usage error: unknown option, a `--rev` starting with `-`, `--diffs` without `--path`, `--force` without `--output`, or a refused `--output` |
+| 3 | git: not a git repository, no commits, unknown revision, git missing, a git call timed out, or git output too large |

@@ -1,6 +1,7 @@
 """Command line for gitarch. Everything printed passes through _redact."""
 import argparse
 import os
+import stat
 import sys
 
 from gitarch import history
@@ -14,10 +15,16 @@ EXIT_GIT = 3
 
 EPILOG = """\
 exit codes:
-  0  ok
-  2  usage error (including a --rev starting with "-")
-  3  not a git repository, no commits, unknown revision, git missing,
-     a git call timed out, or git output too large
+  code  meaning
+  0     ok
+  2     usage error: unknown option, a --rev starting with "-", --diffs
+        without --path, --force without --output, or a refused --output
+  3     git: not a git repository, no commits, unknown revision, git
+        missing, a git call timed out, or git output too large
+
+--output never overwrites an existing file unless --force is given, never
+writes through a symlink, and refuses any place inside the analysed
+repository (its work tree or its .git directory).
 
 gitarch only reads: it runs git (rev-parse, log, show, diff-tree, ls-files,
 cat-file) with hooks, pagers, external diffs, textconv and signature checks
@@ -80,6 +87,11 @@ def _build_parser():
                         help=f"with --path: diffs of the newest {history.DIFF_COMMITS} "
                              f"commits, at most {history.DIFF_LINES} lines each, "
                              "redacted; binary diffs skipped")
+    parser.add_argument("--output", metavar="PATH",
+                        help="write the report to PATH (default: stdout); never "
+                             "inside the repository")
+    parser.add_argument("--force", action="store_true",
+                        help="allow --output to replace an existing regular file")
     parser.add_argument("--timeout", type=_positive, default=DEFAULT_TIMEOUT,
                         metavar="SECONDS",
                         help=f"per git call timeout (default: {DEFAULT_TIMEOUT})")
@@ -89,6 +101,54 @@ def _build_parser():
 def _write(stream, text):
     """The single exit point for everything gitarch prints; always redacted."""
     stream.write(redact(text))
+
+
+def _check_output(path, force):
+    """Refusal message for --output PATH, or None. Re-checked atomically by
+    the O_EXCL / O_NOFOLLOW open in _open_output."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"--output {path}: cannot check ({exc.strerror})"
+    if stat.S_ISLNK(info.st_mode):
+        return f"--output {path}: is a symlink; refusing to follow it"
+    if not force:
+        return f"--output {path}: already exists (use --force to replace it)"
+    if not stat.S_ISREG(info.st_mode):
+        return f"--output {path}: not a regular file"
+    return None
+
+
+def _inside(path, root):
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:              # different drives
+        return False
+
+
+def _check_not_in_repo(path, git):
+    """Refusal message when PATH would land in the repository's work tree,
+    .git directory or common git directory."""
+    target = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(path))),
+                          os.path.basename(os.path.abspath(path)))
+    roots = []
+    for args in (("--absolute-git-dir",), ("--git-common-dir",), ("--show-toplevel",)):
+        out = git.run("rev-parse", *args, ok=(0, 128)).decode("utf-8", "replace").strip()
+        if out:
+            roots.append(os.path.realpath(os.path.join(git.repo, out)))
+    for root in roots:
+        if _inside(target, root):
+            return f"--output {path}: refusing to write inside the analysed repository"
+    return None
+
+
+def _open_output(path, force):
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= os.O_TRUNC if force else os.O_EXCL
+    fd = os.open(path, flags, 0o644)
+    return os.fdopen(fd, "w", encoding="utf-8", newline="\n")
 
 
 def _fail(message, code):
@@ -111,15 +171,31 @@ def main(argv=None):
         return _fail(str(exc), EXIT_USAGE)
     if args.diffs and args.path is None:
         return _fail("--diffs requires --path", EXIT_USAGE)
+    if args.force and not args.output:
+        return _fail("--force needs --output", EXIT_USAGE)
+    if args.output:
+        refusal = _check_output(args.output, args.force)
+        if refusal:
+            return _fail(refusal, EXIT_USAGE)
     git = Git(args.repo, timeout=args.timeout)
     try:
         model = history.build(git, args.rev, path=args.path, recent_days=args.recent,
                               authors=args.authors)
+        refusal = _check_not_in_repo(args.output, git) if args.output else None
+        if refusal:
+            return _fail(refusal, EXIT_USAGE)
         subjects = history.subjects(git, model) if args.messages else {}
         diffs = history.diffs(git, model) if args.diffs else None
     except GitError as exc:
         return _fail(str(exc), EXIT_GIT)
     name = os.path.basename(os.path.abspath(args.repo)) or "/"
-    _write(sys.stdout, render(Report(name, model, args.messages, diffs, subjects),
-                              args.format))
+    document = render(Report(name, model, args.messages, diffs, subjects), args.format)
+    if not args.output:
+        _write(sys.stdout, document)
+        return EXIT_OK
+    try:
+        with _open_output(args.output, args.force) as stream:
+            _write(stream, document)
+    except OSError as exc:
+        return _fail(f"--output {args.output}: cannot write ({exc.strerror})", EXIT_USAGE)
     return EXIT_OK

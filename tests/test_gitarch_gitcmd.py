@@ -238,6 +238,31 @@ class TestHostileRepo(GitTestCase):
         self.assertEqual(history.build(git, rev="signed").overview.commits, 4)
         self.assertFalse(marker.exists(), "gitarch let git run an external program")
 
+        # Every CLI mode in every format, on main and on the signed commit.
+        reports = self.dir / "reports"
+        reports.mkdir()
+        modes = ([], ["--path", "lib/helpers.py"], ["--path", "lib/helpers.py", "--messages"],
+                 ["--path", "lib/helpers.py", "--diffs"], ["--path", "app.py", "--diffs",
+                                                            "--messages", "--authors"],
+                 ["--path", "lib", "--diffs"], ["--messages"], ["--authors"])
+        runs = 0
+        for rev in ("main", "signed"):
+            for fmt in ("text", "md", "html"):
+                for mode in modes:
+                    code, out, err = run_cli([repo, "--rev", rev, "--format", fmt, *mode])
+                    self.assertEqual(code, 0, (rev, fmt, mode, err))
+                    self.assertTrue(out.strip())
+                    if "--diffs" in mode and "lib/helpers.py" in mode:
+                        self.assertIn("rename from lib/util.py", out)    # followed
+                    runs += 1
+            target = reports / f"{rev}.html"
+            code, _, err = run_cli([repo, "--rev", rev, "--format", "html", "--path",
+                                    "app.py", "--diffs", "--output", target])
+            self.assertEqual(code, 0, err)
+            self.assertTrue(target.read_text(encoding="utf-8"))
+        self.assertEqual(runs, 2 * 3 * len(modes))
+        self.assertFalse(marker.exists(), "gitarch CLI let git run an external program")
+
         # The trap is live: run directly, it writes the marker ...
         subprocess.run([str(script)], input=b"", check=True)
         self.assertTrue(marker.exists())
