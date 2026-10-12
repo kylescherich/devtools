@@ -1,4 +1,5 @@
 """Tests for SQLite database inspection."""
+import statistics
 import unittest
 import unittest.mock
 import tempfile

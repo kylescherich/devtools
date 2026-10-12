@@ -261,6 +261,8 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings, sampl
     
     # Try rowid first
     try:
+        if obj_type != "table":
+            raise sqlite3.OperationalError("views have no defined row order")
         conn.execute(f"SELECT rowid FROM {quoted_name} LIMIT 0")
         order = "rowid"
         order_clause = " ORDER BY rowid"

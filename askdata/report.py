@@ -197,7 +197,7 @@ def render_terminal(model):
                 if col['distinct_exact']:
                     distinct_str = f"{col['distinct']:,} (exact)"
                 else:
-                    distinct_str = f"{col['distinct']:,} (estimated, sample)"
+                    distinct_str = (f"≥ {col['distinct']:,} (estimated)" if col['distinct'] >= 100000 else f"{col['distinct']:,} (estimated, sample)")
                 lines.append(f"    Distinct: {distinct_str}")
                 
                 if col['samples']:
@@ -217,11 +217,11 @@ def render_terminal(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}")
+                            lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}{' approx.' if num.get('median_approx') else ''}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}")
+                        lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}{' approx.' if num.get('median_approx') else ''}")
                 
                 if col.get('dates'):
                     dates = col['dates']
@@ -407,7 +407,7 @@ def render_md(model):
                 if col['distinct_exact']:
                     distinct_str = f"{col['distinct']:,} (exact)"
                 else:
-                    distinct_str = f"{col['distinct']:,} (estimated, sample)"
+                    distinct_str = (f"≥ {col['distinct']:,} (estimated)" if col['distinct'] >= 100000 else f"{col['distinct']:,} (estimated, sample)")
                 row.append(distinct_str)
                 
                 # Samples
@@ -432,11 +432,11 @@ def render_md(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}{' approx.' if num.get('median_approx') else ''}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}{' approx.' if num.get('median_approx') else ''}")
                 
                 if col.get('dates'):
                     dates = col['dates']
@@ -641,7 +641,7 @@ def render_html(model):
                 if col['distinct_exact']:
                     distinct_str = f"{col['distinct']:,} (exact)"
                 else:
-                    distinct_str = f"{col['distinct']:,} (estimated, sample)"
+                    distinct_str = (f"≥ {col['distinct']:,} (estimated)" if col['distinct'] >= 100000 else f"{col['distinct']:,} (estimated, sample)")
                 lines.append(f'<td>{distinct_str}</td>')
                 
                 # Samples
@@ -671,7 +671,7 @@ def render_html(model):
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}{' approx.' if num.get('median_approx') else ''}")
                 
                 if col.get('dates'):
                     dates = col['dates']
