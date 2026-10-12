@@ -105,6 +105,20 @@ class TestCredentials(RedactTable):
             ("a basic setup", "a basic setup"),
         ])
 
+    def test_dec190_scheme_words(self):
+        self.check_rows([
+            # 1. a declined word is not consumed
+            ("sent basic Basic dXNlcjpwYXNzd29yZA== ok", f"sent basic Basic {R} ok"),
+            ("use bearer Bearer abc123def456 ok", f"use bearer Bearer {R} ok"),
+            ("Bearer Bearer Bearer abc123def456", f"Bearer Bearer Bearer {R}"),
+            # 2. >= 16 characters is redacted whatever the mix
+            ("Bearer abcdefghijklmnop", f"Bearer {R}"),
+            ("Bearer abcdefghijklmno", "Bearer abcdefghijklmno"),
+            ("Basic authentication failed", "Basic authentication failed"),
+            ("Bearer token missing", "Bearer token missing"),
+            ("Basic configuration loaded", "Basic configuration loaded"),
+        ])
+
 
 class TestSession(RedactTable):
     def test_item2_session_material(self):

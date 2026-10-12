@@ -50,6 +50,8 @@ SECRET_CASES = [
     ("onyx", "callback phone=+1-555-SNTphoneOnyx ok", "SNTphoneOnyx"),
     ("ruby", "login password=correct horse SNTmwRuby staple", "SNTmwRuby"),
     ("topaz", "user said password is SNTspokenTopaz today", "SNTspokenTopaz"),
+    # DEC-190: a declined scheme word must not hide the real token.
+    ("quartz", "sent basic Basic SNTbasicQuartz== ok", "SNTbasicQuartz"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]

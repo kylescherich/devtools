@@ -51,6 +51,12 @@ _VALUE_END = r"(?:[\s,;&\"'}\]]|\Z)"
 _KEEP_VALUE = (r"(?![\"']?+" + _KEEP_WORDS + r"[\"']?+" + _VALUE_END + r")")
 # The same for values that run to the end of the line.
 _KEEP_LINE = r"(?!" + _KEEP_WORDS + r"[\"']?[ \t]*+(?:[\r\n]|\Z))"
+# A token after Basic/Bearer: >= 16 token characters, or >= 8 with a digit,
+# one of + / =, or an upper-case letter after the first. Lookaheads only, so
+# a word that does not qualify is never consumed ("basic Basic <b64>").
+_TOK = r"[A-Za-z0-9._~+/=-]"
+_SCHEME_TOKEN = (r"(?=" + _TOK + r"{8})(?=" + _TOK + r"{16}|" + _TOK + r"*?[0-9+/=]"
+                 r"|" + _TOK + _TOK + r"*?(?-i:[A-Z]))" + _TOK + r"++")
 # The marker as reports print it: plain, or HTML-escaped in md/html output.
 _MARK = r"(?:<redacted>|&lt;redacted&gt;)"
 # Keys whose unquoted value may contain spaces: it runs to the end of the
@@ -69,17 +75,6 @@ _DONE_AUTH = r"(?!" + _MARK + r"(?:[\"'\r\n]|\Z))"
 _DONE_MULTI = r"(?!" + _MARK + r"(?:[\"']|" + _MULTI_END + r"))"
 _DONE_KEY = (r"(?!(?P<dq>[\"'])" + _MARK + r"(?P=dq)"
              r"|" + _MARK + r"(?:[\s,;&\"'}\]]|\Z))")
-
-
-def _scheme_token(match):
-    """Redact the token after Basic/Bearer when it looks like one: >= 8
-    characters with a digit, one of + / =, or an upper-case letter after the
-    first. "Basic authentication failed" and "Bearer token missing" stay."""
-    token = match.group(1)
-    if len(token) >= 8 and (any(c.isdigit() or c in "+/=" for c in token)
-                            or any(c.isupper() for c in token[1:])):
-        return match.group(0)[:match.start(1) - match.start(0)] + REDACTED
-    return match.group(0)
 
 
 def _luhn(digits):
@@ -153,8 +148,8 @@ _RULES = [
     (re.compile(r"(?i)(" + _ID_START + r"(?:set-)?cookie[\"']?[ \t]*+[:=][ \t]*+)"
                 + _DONE_AUTH + _KEEP_LINE + r"(?=[^\"'\s])[^\r\n]+"),
      r"\1" + REDACTED),
-    # "Basic <token>" / "Bearer <token>" anywhere; see _scheme_token.
-    (re.compile(r"(?i)\b(?:basic|bearer)[ \t]++([A-Za-z0-9._~+/=-]+)"), _scheme_token),
+    # "Basic <token>" / "Bearer <token>" anywhere; see _SCHEME_TOKEN.
+    (re.compile(r"(?i)(\b(?:basic|bearer)[ \t]++)" + _SCHEME_TOKEN), r"\1" + REDACTED),
     # Multi-word values: "password=my secret phrase user=bob" keeps user=bob.
     (re.compile(r"(?i)(" + _MULTI_KEYS + r"[\"']?\s*+[:=][ \t]*+)" + _DONE_MULTI
                 + _KEEP_MULTI + r"(?=[^\"'\s])[^\r\n]+?" + _MULTI_END),

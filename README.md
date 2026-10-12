@@ -188,8 +188,10 @@ Details:
   GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
   GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.
 - `Basic <token>` / `Bearer <token>` anywhere, when the token looks like one
-  (8+ characters with a digit, `+`, `/`, `=` or an inner capital), so "Basic
-  authentication failed" stays; the whole `Authorization:` value always.
+  (16+ characters, or 8+ with a digit, `+`, `/`, `=` or an inner capital), so
+  "Basic authentication failed" stays; a word that does not qualify is
+  skipped, never consumed ("basic Basic <token>" is caught); the whole
+  `Authorization:` value always.
 
 ## Exit codes
 
