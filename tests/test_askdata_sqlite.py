@@ -116,7 +116,7 @@ class TestSQLiteInspect(unittest.TestCase):
         """Test that hostile names and values round-trip exactly."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = hostile_db(tmpdir)
-            result = inspect_sqlite(path)
+            result = inspect_sqlite(path, samples=True)
             
             # Assert non-empty
             self.assertIsNotNone(result)

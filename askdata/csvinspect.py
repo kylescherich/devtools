@@ -9,7 +9,7 @@ from pathlib import Path
 from statistics import mean, median
 
 
-def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
+def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None, samples=False):
     """Inspect a CSV file and return analysis results.
     
     Args:
@@ -17,10 +17,11 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
         max_bytes: Maximum file size in bytes (default 500MB)
         max_rows: Maximum number of data rows to process (default 1M)
         deadline: Optional time.monotonic() value to stop processing
+        samples: Whether to collect sample values and top values (default False)
         
     Returns:
         dict with keys: kind, name, size_bytes, encoding, delimiter, has_header,
-        row_count, sampled, columns, malformed, warnings
+        row_count, sampled, samples_enabled, columns, malformed, warnings
     """
     path = Path(path)
     size_bytes = path.stat().st_size
@@ -28,14 +29,14 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
     # Try UTF-8 first, fallback to cp1252 on any UnicodeDecodeError
     encoding = "utf-8"
     try:
-        return _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline)
+        return _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline, samples)
     except UnicodeDecodeError:
         encoding = "cp1252"
         return _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline, 
-                                         encoding_fallback=True)
+                                         samples, encoding_fallback=True)
 
 
-def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline, encoding_fallback=False):
+def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline, samples, encoding_fallback=False):
     """Internal function to inspect CSV with a specific encoding."""
     warnings = []
     
@@ -87,6 +88,7 @@ def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, 
                 "has_header": has_header,
                 "row_count": 0,
                 "sampled": False,
+                "samples_enabled": samples,
                 "columns": [],
                 "malformed": {"count": 0, "first_lines": []},
                 "warnings": warnings + ["empty file"]
@@ -181,8 +183,8 @@ def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, 
                         if "distinct counts sampled" not in warnings:
                             warnings.append("distinct counts sampled")
                 
-                # Collect samples (first 5 distinct)
-                if len(col_data["samples"]) < 5 and value not in [s[:80] for s in col_data["samples"]]:
+                # Collect samples (first 5 distinct) only if enabled
+                if samples and len(col_data["samples"]) < 5 and value not in [s[:80] for s in col_data["samples"]]:
                     col_data["samples"].append(value[:80])
                 
                 # Type detection
@@ -199,7 +201,7 @@ def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, 
         columns = []
         for col_name in header:
             col_data = columns_data[col_name]
-            col_result = _analyze_column(col_data, row_count, warnings)
+            col_result = _analyze_column(col_data, row_count, warnings, samples)
             columns.append(col_result)
         
         return {
@@ -211,6 +213,7 @@ def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, 
             "has_header": has_header,
             "row_count": row_count,
             "sampled": sampled,
+            "samples_enabled": samples,
             "columns": columns,
             "malformed": {
                 "count": malformed_count,
@@ -298,7 +301,7 @@ def _parse_date(value):
     return None
 
 
-def _analyze_column(col_data, total_rows, warnings):
+def _analyze_column(col_data, total_rows, warnings, samples):
     """Analyze column data and determine final type and statistics."""
     non_missing = col_data["non_missing"]
     
@@ -311,7 +314,7 @@ def _analyze_column(col_data, total_rows, warnings):
             "missing": col_data["missing"],
             "distinct": 0,
             "distinct_exact": col_data["distinct_exact"],
-            "samples": [],
+            "samples": [] if samples else [],
             "numeric": None,
             "dates": None,
             "top": None
@@ -366,7 +369,7 @@ def _analyze_column(col_data, total_rows, warnings):
     # Calculate top values
     distinct = len(col_data["value_counter"]) if col_data["distinct_exact"] else len(col_data["value_counter"])
     top = None
-    if (col_data["distinct_exact"] and distinct <= 50 and 
+    if samples and (col_data["distinct_exact"] and distinct <= 50 and 
         final_type in ("text", "bool", "mixed")):
         top = [[value, count] for value, count in col_data["value_counter"].most_common(10)]
     
@@ -378,7 +381,7 @@ def _analyze_column(col_data, total_rows, warnings):
         "missing": col_data["missing"],
         "distinct": distinct,
         "distinct_exact": col_data["distinct_exact"],
-        "samples": col_data["samples"],
+        "samples": col_data["samples"] if samples else [],
         "numeric": numeric,
         "dates": dates,
         "top": top

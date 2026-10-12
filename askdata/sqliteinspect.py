@@ -132,7 +132,7 @@ def _is_date_value(value):
     return _is_date(value)
 
 
-def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
+def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False, samples=False):
     """Inspect a SQLite database and return analysis.
     
     Args:
@@ -140,6 +140,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
         max_rows: Maximum rows to analyze per table (default 1,000,000)
         deadline: Optional time.monotonic() deadline for timeout
         frozen: If True, treat database as unchanging (immutable=1)
+        samples: Whether to collect sample values and top values (default False)
         
     Returns:
         Dictionary with database analysis including tables, relationships, and warnings
@@ -156,6 +157,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
             "kind": "sqlite",
             "name": path.name,
             "size_bytes": path.stat().st_size,
+            "samples_enabled": samples,
             "tables": [],
             "relationships": [],
             "warnings": []
@@ -189,7 +191,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
                 break
             
             try:
-                table_info = _analyze_table(conn, obj_name, obj_type, max_rows, deadline, result["warnings"])
+                table_info = _analyze_table(conn, obj_name, obj_type, max_rows, deadline, result["warnings"], samples)
                 result["tables"].append(table_info)
                 
                 # Collect foreign key relationships
@@ -238,7 +240,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
     return result
 
 
-def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
+def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings, samples):
     """Analyze a single table or view."""
     quoted_name = _quote_identifier(obj_name)
     
@@ -306,14 +308,14 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
         }
         
         # Analyze column statistics
-        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings)
+        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples)
         
         table_info["columns"].append(col_info)
     
     return table_info
 
 
-def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings):
+def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples):
     """Analyze statistics for a single column."""
     quoted_col = _quote_identifier(col_name)
     
@@ -341,7 +343,7 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
         col_info["share"] = 0.0
         col_info["distinct"] = 0
         col_info["distinct_exact"] = not sampled
-        col_info["samples"] = []
+        col_info["samples"] = [] if samples else []
         col_info["numeric"] = None
         col_info["dates"] = None
         col_info["top"] = None
@@ -425,23 +427,26 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
     col_info["distinct"] = cursor.fetchone()[0]
     col_info["distinct_exact"] = not sampled
     
-    # Get samples (first 5 distinct non-null values)
-    cursor = conn.execute(f"""
-        SELECT DISTINCT {quoted_col} FROM ({src_query})
-        WHERE {quoted_col} IS NOT NULL AND {quoted_col} != ''
-        LIMIT 5
-    """)
-    samples = []
-    for row in cursor.fetchall():
-        value = row[0]
-        if isinstance(value, bytes):
-            samples.append(f"<blob {len(value)} bytes>")
-        else:
-            value_str = str(value)
-            if len(value_str) > 80:
-                value_str = value_str[:80]
-            samples.append(value_str)
-    col_info["samples"] = samples
+    # Get samples (first 5 distinct non-null values) only if enabled
+    if samples:
+        cursor = conn.execute(f"""
+            SELECT DISTINCT {quoted_col} FROM ({src_query})
+            WHERE {quoted_col} IS NOT NULL AND {quoted_col} != ''
+            LIMIT 5
+        """)
+        samples_list = []
+        for row in cursor.fetchall():
+            value = row[0]
+            if isinstance(value, bytes):
+                samples_list.append(f"<blob {len(value)} bytes>")
+            else:
+                value_str = str(value)
+                if len(value_str) > 80:
+                    value_str = value_str[:80]
+                samples_list.append(value_str)
+        col_info["samples"] = samples_list
+    else:
+        col_info["samples"] = []
     
     # Numeric statistics for int/float/mixed with numeric candidate
     if col_info["type"] in ("int", "float") or (col_info["type"] == "mixed" and col_info["candidate"] in ("int", "float")):
@@ -488,8 +493,8 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
     else:
         col_info["dates"] = None
     
-    # Top values for text/mixed when distinct <= 50
-    if col_info["distinct"] <= 50 and col_info["type"] in ("text", "mixed"):
+    # Top values for text/mixed when distinct <= 50 (only if samples enabled)
+    if samples and col_info["distinct"] <= 50 and col_info["type"] in ("text", "mixed"):
         cursor = conn.execute(f"""
             SELECT {quoted_col}, COUNT(*) as cnt
             FROM ({src_query})

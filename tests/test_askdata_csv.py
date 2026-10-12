@@ -30,7 +30,7 @@ class TestCSVInspect(unittest.TestCase):
         """Test clean CSV with proper types and statistics."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = clean_csv(tmpdir)
-            result = inspect_csv(path)
+            result = inspect_csv(path, samples=True)
             
             # Assert non-empty
             self.assertIsNotNone(result)
@@ -78,7 +78,7 @@ class TestCSVInspect(unittest.TestCase):
         """Test messy CSV with malformed rows, blank header, encoding."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = messy_csv(tmpdir)
-            result = inspect_csv(path)
+            result = inspect_csv(path, samples=True)
             
             # Assert non-empty
             self.assertIsNotNone(result)

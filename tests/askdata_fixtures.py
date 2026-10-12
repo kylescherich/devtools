@@ -385,3 +385,100 @@ def mixed_db(directory, int_share):
     conn.close()
     
     return path
+
+
+def privacy_csv(directory):
+    """Create a CSV with privacy-sensitive data (30 rows).
+    
+    Columns: id (int), email, secret (cycling tokens), acct (16-digit int).
+    
+    Returns path to the created file.
+    """
+    directory = Path(directory)
+    path = directory / "privacy.csv"
+    
+    import string
+    import random
+    
+    # Seed for reproducibility
+    random.seed(42)
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write("id,email,secret,acct\n")
+        
+        for i in range(30):
+            email = f"user{i}@example.com"
+            
+            # Cycle through 3 types of secrets
+            if i % 3 == 0:
+                # GitHub token: ghp_ + 36 alphanumeric
+                secret = "ghp_" + ''.join(random.choices(string.ascii_letters + string.digits, k=36))
+            elif i % 3 == 1:
+                # OpenAI key: sk- + 32 alphanumeric
+                secret = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+            else:
+                # 16-digit number as text
+                secret = ''.join(random.choices(string.digits, k=16))
+            
+            # Account number: 16-digit integer starting at 4000000000000000
+            acct = 4000000000000000 + i
+            
+            f.write(f"{i},{email},{secret},{acct}\n")
+    
+    return path
+
+
+def privacy_db(directory):
+    """Create a SQLite database with privacy-sensitive data (30 rows).
+    
+    Columns: id (int), email, secret (cycling tokens), acct (16-digit int).
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    import string
+    import random
+    
+    directory = Path(directory)
+    path = directory / "privacy.db"
+    
+    # Seed for reproducibility
+    random.seed(42)
+    
+    conn = sqlite3.connect(str(path))
+    
+    conn.execute("""
+        CREATE TABLE sensitive (
+            id INTEGER PRIMARY KEY,
+            email TEXT,
+            secret TEXT,
+            acct INTEGER
+        )
+    """)
+    
+    for i in range(30):
+        email = f"user{i}@example.com"
+        
+        # Cycle through 3 types of secrets
+        if i % 3 == 0:
+            # GitHub token: ghp_ + 36 alphanumeric
+            secret = "ghp_" + ''.join(random.choices(string.ascii_letters + string.digits, k=36))
+        elif i % 3 == 1:
+            # OpenAI key: sk- + 32 alphanumeric
+            secret = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+        else:
+            # 16-digit number as text
+            secret = ''.join(random.choices(string.digits, k=16))
+        
+        # Account number: 16-digit integer starting at 4000000000000000
+        acct = 4000000000000000 + i
+        
+        conn.execute(
+            "INSERT INTO sensitive (id, email, secret, acct) VALUES (?, ?, ?, ?)",
+            (i, email, secret, acct)
+        )
+    
+    conn.commit()
+    conn.close()
+    
+    return path

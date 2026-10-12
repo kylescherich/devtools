@@ -16,7 +16,7 @@ class TestReports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.sqliteinspect import inspect_sqlite
             path = hostile_db(tmpdir)
-            model = inspect_sqlite(path)
+            model = inspect_sqlite(path, samples=True)
             
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
@@ -52,7 +52,7 @@ class TestReports(unittest.TestCase):
             
             # Test clean_csv
             path = clean_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -63,7 +63,7 @@ class TestReports(unittest.TestCase):
             
             # Test messy_csv
             path = messy_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -74,7 +74,7 @@ class TestReports(unittest.TestCase):
             
             # Test fk_db
             path = fk_db(tmpdir)
-            model = inspect_sqlite(path)
+            model = inspect_sqlite(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -85,7 +85,7 @@ class TestReports(unittest.TestCase):
             
             # Test hostile_db
             path = hostile_db(tmpdir)
-            model = inspect_sqlite(path)
+            model = inspect_sqlite(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -113,7 +113,7 @@ class TestReports(unittest.TestCase):
             
             # Test clean_csv
             path = clean_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -125,7 +125,7 @@ class TestReports(unittest.TestCase):
             
             # Test messy_csv
             path = messy_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -137,7 +137,7 @@ class TestReports(unittest.TestCase):
             
             # Test fk_db
             path = fk_db(tmpdir)
-            model = inspect_sqlite(path)
+            model = inspect_sqlite(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -149,7 +149,7 @@ class TestReports(unittest.TestCase):
             
             # Test hostile_db
             path = hostile_db(tmpdir)
-            model = inspect_sqlite(path)
+            model = inspect_sqlite(path, samples=True)
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
             
@@ -164,7 +164,7 @@ class TestReports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.csvinspect import inspect_csv
             path = clean_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             
             terminal_output = render_terminal(model)
             self.assertNotEqual(terminal_output, "")
@@ -186,7 +186,7 @@ class TestReports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.csvinspect import inspect_csv
             path = clean_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             
             html_output = render_html(model)
             self.assertNotEqual(html_output, "")
@@ -213,7 +213,7 @@ class TestReports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.csvinspect import inspect_csv
             path = messy_csv(tmpdir)
-            model = inspect_csv(path)
+            model = inspect_csv(path, samples=True)
             
             terminal_output = render_terminal(model)
             self.assertNotEqual(terminal_output, "")
@@ -240,7 +240,7 @@ class TestReports(unittest.TestCase):
                 f.write('x\x1b[31mred,123\n')
             
             from askdata.csvinspect import inspect_csv
-            model = inspect_csv(csv_path)
+            model = inspect_csv(csv_path, samples=True)
             
             terminal_output = render_terminal(model)
             self.assertNotEqual(terminal_output, "")
@@ -261,7 +261,7 @@ class TestReports(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             from askdata.sqliteinspect import inspect_sqlite
             path = fk_db(tmpdir)
-            model = inspect_sqlite(path)
+            model = inspect_sqlite(path, samples=True)
             
             terminal_output = render_terminal(model)
             self.assertNotEqual(terminal_output, "")
@@ -289,7 +289,7 @@ class TestReports(unittest.TestCase):
                 f.write('"\u202eRTL",456\n')
             
             from askdata.csvinspect import inspect_csv
-            model = inspect_csv(csv_path)
+            model = inspect_csv(csv_path, samples=True)
             
             terminal_output = render_terminal(model)
             self.assertNotEqual(terminal_output, "")
