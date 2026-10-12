@@ -1,0 +1,357 @@
+"""Read text and JSONL log files (optionally gzipped) into Entry records.
+
+Files are opened read-only, never through a symlink, and decoded as UTF-8 with
+errors="replace". Nothing here prints; callers render through loglens.redact.
+"""
+import gzip
+import json
+import os
+import re
+import stat
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
+
+DEFAULT_MAX_BYTES = 1024 ** 3          # 1 GB, total across all files
+DEFAULT_MAX_LINES = 10_000_000         # total across all files
+MAX_CONTINUATION = 200
+TRUNCATED_MARKER = "...(truncated)"
+LEVEL_WINDOW = 64
+INVALID_KEEP = 3
+
+ERROR, WARNING, INFO, DEBUG, UNKNOWN = "ERROR", "WARNING", "INFO", "DEBUG", "UNKNOWN"
+# UNKNOWN sits below WARNING: "at least WARNING" never includes it.
+LEVEL_RANK = {DEBUG: 0, UNKNOWN: 1, INFO: 2, WARNING: 3, ERROR: 4}
+LEVEL_WORDS = {
+    "ERROR": ERROR, "ERR": ERROR, "CRITICAL": ERROR, "FATAL": ERROR,
+    "ALERT": ERROR, "EMERG": ERROR,
+    "WARN": WARNING, "WARNING": WARNING,
+    "INFO": INFO, "NOTICE": INFO,
+    "DEBUG": DEBUG, "TRACE": DEBUG,
+}
+_LEVEL_RE = re.compile(r"\b(" + "|".join(sorted(LEVEL_WORDS, key=len, reverse=True))
+                       + r")\b", re.IGNORECASE)
+
+_ISO_RE = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})"
+    r"(?:[.,](\d+))?"
+    r"(Z|[+-]\d{2}(?::?\d{2})?)?(?![\d])", re.IGNORECASE)
+_MONTHS = {m: i for i, m in enumerate(
+    ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1)}
+_SYSLOG_RE = re.compile(r"(" + "|".join(_MONTHS) + r") +(\d{1,2}) (\d{2}):(\d{2}):(\d{2})\b")
+
+FIELD_KEYS = {
+    "ts": ("ts", "time", "timestamp", "@timestamp"),
+    "level": ("level", "lvl", "severity"),
+    "message": ("msg", "message"),
+}
+_JSONL_SUFFIXES = (".jsonl", ".ndjson")
+
+
+class InputError(Exception):
+    """Input missing, unreadable, a symlink, or over --max-bytes (exit 3)."""
+
+
+class UsageError(Exception):
+    """Bad option value (exit 2)."""
+
+
+@dataclass
+class Entry:
+    ts: datetime | None
+    level: str
+    message: str
+    continuation_lines: list = field(default_factory=list)
+    file: str = ""
+    line_no: int = 0
+    truncated: bool = False
+
+    def add_continuation(self, line):
+        if self.truncated:
+            return
+        if len(self.continuation_lines) >= MAX_CONTINUATION:
+            self.continuation_lines.append(TRUNCATED_MARKER)
+            self.truncated = True
+            return
+        self.continuation_lines.append(line)
+
+
+@dataclass
+class ReadResult:
+    entries: list                 # timestamped, merged in timeline order
+    untimed: list                 # no timestamp: kept, excluded from the timeline
+    files: list
+    lines_read: int = 0
+    bytes_read: int = 0
+    decode_errors: int = 0        # lines that held non-UTF-8 bytes
+    invalid_json: int = 0
+    invalid_json_lines: dict = field(default_factory=dict)   # file -> first 3 line_nos
+    sampled: bool = False
+    max_lines: int = DEFAULT_MAX_LINES
+
+    @property
+    def sampled_note(self):
+        return f"sampled: first {self.max_lines} lines" if self.sampled else ""
+
+
+def normalise_level(word):
+    if not isinstance(word, str):
+        return UNKNOWN
+    return LEVEL_WORDS.get(word.strip().upper(), UNKNOWN)
+
+
+def find_level(line):
+    """First known level word within the first 64 characters of the line."""
+    match = _LEVEL_RE.search(line[:LEVEL_WINDOW])
+    return LEVEL_WORDS[match.group(1).upper()] if match else UNKNOWN
+
+
+def _offset(text):
+    if text is None:
+        return timezone.utc
+    if text.upper() == "Z":
+        return timezone.utc
+    sign = -1 if text[0] == "-" else 1
+    digits = text[1:].replace(":", "")
+    hours, minutes = int(digits[:2]), int(digits[2:4] or 0)
+    return timezone(sign * timedelta(hours=hours, minutes=minutes))
+
+
+def _iso_at(text):
+    match = _ISO_RE.match(text)
+    if not match:
+        return None, None
+    year, month, day, hour, minute, second, frac, off = match.groups()
+    micro = int((frac or "0")[:6].ljust(6, "0"))
+    try:
+        ts = datetime(int(year), int(month), int(day), int(hour), int(minute),
+                      int(second), micro, tzinfo=_offset(off))
+    except ValueError:
+        return None, None
+    return ts.astimezone(timezone.utc), match.end()
+
+
+def parse_line_timestamp(line, year):
+    """Timestamp at the start of a text line -> (UTC datetime, end index)."""
+    ts, end = _iso_at(line)
+    if ts is not None:
+        return ts, end
+    match = _SYSLOG_RE.match(line)
+    if match:
+        month, day, hour, minute, second = match.groups()
+        try:
+            ts = datetime(year, _MONTHS[month], int(day), int(hour), int(minute),
+                          int(second), tzinfo=timezone.utc)
+        except ValueError:
+            return None, None
+        return ts, match.end()
+    return None, None
+
+
+def parse_json_timestamp(value):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        seconds = value / 1000 if abs(value) > 1e11 else value
+        try:
+            return datetime.fromtimestamp(seconds, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    if isinstance(value, str):
+        ts, end = _iso_at(value.strip())
+        if ts is not None and end == len(value.strip()):
+            return ts
+    return None
+
+
+def parse_fields(specs):
+    """--field name=key overrides -> {name: (key,)}."""
+    keys = dict(FIELD_KEYS)
+    for spec in specs or ():
+        name, sep, key = spec.partition("=")
+        name, key = name.strip(), key.strip()
+        if not sep or not key:
+            raise UsageError(f"--field expects NAME=KEY, got {spec!r}")
+        if name == "msg":
+            name = "message"
+        if name not in FIELD_KEYS:
+            raise UsageError(f"--field NAME must be one of ts, level, message; got {name!r}")
+        keys[name] = (key,)
+    return keys
+
+
+def _open_nofollow(path):
+    """Open path read-only as binary, refusing symlinks and non-regular files."""
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        raise InputError(f"{path}: file not found") from None
+    except OSError as exc:
+        raise InputError(f"{path}: cannot read ({exc.strerror})") from None
+    if stat.S_ISLNK(info.st_mode):
+        raise InputError(f"{path}: is a symlink; symlinks are not followed")
+    if not stat.S_ISREG(info.st_mode):
+        raise InputError(f"{path}: not a regular file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        raise InputError(f"{path}: cannot read ({exc.strerror})") from None
+    raw = os.fdopen(fd, "rb")
+    try:
+        magic = raw.peek(2)[:2] if hasattr(raw, "peek") else b""
+    except OSError as exc:
+        raw.close()
+        raise InputError(f"{path}: cannot read ({exc.strerror})") from None
+    if magic == b"\x1f\x8b" or str(path).lower().endswith(".gz"):
+        return gzip.GzipFile(fileobj=raw, mode="rb"), raw
+    return raw, raw
+
+
+def _is_jsonl_name(path):
+    name = str(path).lower()
+    if name.endswith(".gz"):
+        name = name[:-3]
+    return name.endswith(_JSONL_SUFFIXES)
+
+
+class _Reader:
+    def __init__(self, *, year, fields, max_bytes, max_lines, fmt):
+        self.year = year if year is not None else datetime.now(timezone.utc).year
+        self.fields = fields
+        self.max_bytes = max_bytes
+        self.max_lines = max_lines
+        self.fmt = fmt
+        self.result = ReadResult(entries=[], untimed=[], files=[], max_lines=max_lines)
+
+    def _lines(self, path):
+        """Yield (line_no, decoded line) within the byte and line guards."""
+        stream, raw = _open_nofollow(path)
+        res = self.result
+        try:
+            line_no = 0
+            while True:
+                remaining = self.max_bytes - res.bytes_read
+                try:
+                    data = stream.readline(remaining + 1)
+                except (OSError, EOFError, gzip.BadGzipFile) as exc:
+                    raise InputError(f"{path}: cannot read ({exc})") from None
+                if not data:
+                    return
+                if res.lines_read >= self.max_lines:
+                    res.sampled = True
+                    return
+                res.bytes_read += len(data)
+                if res.bytes_read > self.max_bytes:
+                    raise InputError(f"input exceeds --max-bytes ({self.max_bytes} bytes)")
+                line_no += 1
+                res.lines_read += 1
+                try:
+                    text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    text = data.decode("utf-8", errors="replace")
+                    res.decode_errors += 1
+                if line_no == 1:
+                    text = text.removeprefix("﻿")
+                yield line_no, text.rstrip("\r\n")
+        finally:
+            stream.close()
+            raw.close()
+
+    def _is_jsonl(self, path):
+        if self.fmt != "auto":
+            return self.fmt == "jsonl"
+        return _is_jsonl_name(path)
+
+    def read_file(self, path):
+        if self._is_jsonl(path):
+            yield from self._read_jsonl(path)
+        else:
+            yield from self._read_text(path)
+
+    def _read_text(self, path):
+        current = None
+        for line_no, line in self._lines(path):
+            ts, end = parse_line_timestamp(line, self.year)
+            if ts is None:
+                if not line.strip():
+                    continue
+                if current is not None:
+                    current.add_continuation(line)
+                    continue
+                # Leading lines with no timestamp form one untimed entry.
+                current = Entry(None, find_level(line), line.strip(), [], str(path), line_no)
+                continue
+            if current is not None:
+                yield current
+            current = Entry(ts, find_level(line), line[end:].strip(), [], str(path), line_no)
+        if current is not None:
+            yield current
+
+    def _first(self, record, name):
+        for key in self.fields[name]:
+            if key in record:
+                return record[key]
+        return None
+
+    def _read_jsonl(self, path):
+        res = self.result
+        for line_no, line in self._lines(path):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except ValueError:
+                record = None
+            if not isinstance(record, dict):
+                res.invalid_json += 1
+                kept = res.invalid_json_lines.setdefault(str(path), [])
+                if len(kept) < INVALID_KEEP:
+                    kept.append(line_no)
+                continue
+            message = self._first(record, "message")
+            message = "" if message is None else (
+                message if isinstance(message, str) else json.dumps(message))
+            first, *rest = message.split("\n") or [""]
+            entry = Entry(parse_json_timestamp(self._first(record, "ts")),
+                          normalise_level(self._first(record, "level")),
+                          first.rstrip("\r"), [], str(path), line_no)
+            for extra in rest:
+                entry.add_continuation(extra.rstrip("\r"))
+            yield entry
+
+
+def read_logs(paths, *, year=None, fields=None, max_bytes=DEFAULT_MAX_BYTES,
+              max_lines=DEFAULT_MAX_LINES, fmt="auto"):
+    """Read every path and merge entries in (ts, file order, line_no) order."""
+    if max_bytes < 1 or max_lines < 1:
+        raise UsageError("--max-bytes and --max-lines must be at least 1")
+    if fmt not in ("auto", "text", "jsonl"):
+        raise UsageError(f"unknown format {fmt!r}")
+    reader = _Reader(year=year, fields=parse_fields(fields), max_bytes=max_bytes,
+                     max_lines=max_lines, fmt=fmt)
+    res = reader.result
+    total = 0
+    for path in paths:
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue                    # reported by _open_nofollow below
+        if stat.S_ISREG(info.st_mode):
+            total += info.st_size
+    if total > max_bytes:
+        raise InputError(f"input exceeds --max-bytes ({max_bytes} bytes)")
+
+    timed = []
+    for order, path in enumerate(paths):
+        res.files.append(str(path))
+        for entry in reader.read_file(path):
+            if entry.ts is None:
+                res.untimed.append(entry)
+            else:
+                timed.append((entry.ts, order, entry.line_no, entry))
+        if res.sampled:
+            break
+    timed.sort(key=lambda item: item[:3])
+    res.entries = [item[3] for item in timed]
+    return res
