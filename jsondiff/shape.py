@@ -306,7 +306,7 @@ class _Builder:
         return paths
 
 
-def _is_jsonl(path, jsonl):
+def is_jsonl(path, jsonl):
     if jsonl is not None:
         return bool(jsonl)
     return os.fspath(path).lower().endswith(JSONL_SUFFIXES)
@@ -321,14 +321,14 @@ def build_shape(path, *, jsonl=None, max_bytes=DEFAULT_MAX_BYTES,
     per-element identities for keyed array matching; JSON documents only.
     Raises InvalidInput for unreadable, unparsable or too-large JSON input.
     """
-    is_jsonl = _is_jsonl(path, jsonl)
+    jsonl_input = is_jsonl(path, jsonl)
     keys = parse_keys(keys)
-    if keys and is_jsonl:
+    if keys and jsonl_input:
         raise UsageError("--key applies to single JSON documents, not JSONL")
     builder = _Builder(max_depth, values, keys)
     model = {
         "file": os.path.basename(os.fspath(path)),
-        "kind": "jsonl" if is_jsonl else "json",
+        "kind": "jsonl" if jsonl_input else "json",
         "values": bool(values),
         "records": 0,
         "sampled": False,
@@ -336,7 +336,7 @@ def build_shape(path, *, jsonl=None, max_bytes=DEFAULT_MAX_BYTES,
     }
     try:
         with open(path, "rb") as f:
-            if is_jsonl:
+            if jsonl_input:
                 _read_jsonl(f, builder, model, max_bytes, max_records)
             else:
                 _read_json(f, builder, max_bytes)
@@ -359,7 +359,11 @@ def _read_json(f, builder, max_bytes):
     if len(data) > max_bytes:
         raise InvalidInput(f"too large (over {max_bytes} bytes)")
     try:
-        record = _parse(data)
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise InvalidInput("not UTF-8") from None
+    try:
+        record = _parse(text)
     except RecursionError:
         raise InvalidInput("not valid JSON (nested too deeply for the parser)") from None
     except ValueError as exc:
@@ -382,7 +386,7 @@ def _read_jsonl(f, builder, model, max_bytes, max_records):
             model["sampled"] = True
             break
         try:
-            record = _parse(line)
+            record = _parse(line.decode("utf-8-sig" if lineno == 1 else "utf-8"))
         except (ValueError, RecursionError):
             invalid["count"] += 1
             if len(invalid["first"]) < FIRST_N:

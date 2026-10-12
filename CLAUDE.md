@@ -38,3 +38,8 @@ Run from the repo root:
 - Never make `--samples` the default; reports stay schema-and-statistics-only unless the user asks.
 - Tests that check privacy or leaks assert non-empty output first (DEC-071).
 - Milestone 2 (natural-language questions via a model) is not authorized.
+
+## jsondiff rules
+- Never print values by default; example values appear only with `--values`.
+- Never compare arrays by position without saying so; unkeyed arrays carry the note "array elements compared by merged shape, not position".
+- Tests that check privacy or leaks assert non-empty output first (DEC-071).

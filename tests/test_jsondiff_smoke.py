@@ -7,7 +7,7 @@ from jsondiff.cli import main
 
 
 class TestJsondiffSmoke(unittest.TestCase):
-    def test_package_imports_and_cli_stub_returns_usage(self):
+    def test_package_imports_and_cli_without_args_is_usage_error(self):
         self.assertTrue(jsondiff.__version__)
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
@@ -15,4 +15,5 @@ class TestJsondiffSmoke(unittest.TestCase):
         output = err.getvalue()
         self.assertTrue(output)
         self.assertEqual(code, 2)
-        self.assertIn("usage: jsondiff", output)
+        self.assertTrue(output.startswith("jsondiff: "))
+        self.assertEqual(len(output.strip().splitlines()), 1)
