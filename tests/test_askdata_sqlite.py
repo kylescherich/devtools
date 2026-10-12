@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 from askdata.sqliteinspect import inspect_sqlite, open_readonly, InspectError
-from tests.askdata_fixtures import fk_db, empty_db, hostile_db, not_a_db
+from tests.askdata_fixtures import fk_db, empty_db, hostile_db, not_a_db, mixed_db
 
 
 class TestSQLiteInspect(unittest.TestCase):
@@ -73,18 +73,20 @@ class TestSQLiteInspect(unittest.TestCase):
             
             # Check amount column has numeric stats
             amount_col = next(c for c in orders["columns"] if c["name"] == "amount")
-            self.assertIn("min", amount_col)
-            self.assertIn("max", amount_col)
-            self.assertLessEqual(amount_col["min"], amount_col["max"])
+            self.assertIsNotNone(amount_col["numeric"])
+            self.assertIn("min", amount_col["numeric"])
+            self.assertIn("max", amount_col["numeric"])
+            self.assertLessEqual(amount_col["numeric"]["min"], amount_col["numeric"]["max"])
             
             # Check placed column is detected as date
             placed_col = next(c for c in orders["columns"] if c["name"] == "placed")
             self.assertEqual(placed_col["type"], "date")
-            self.assertIn("min", placed_col)
-            self.assertIn("max", placed_col)
+            self.assertIsNotNone(placed_col["dates"])
+            self.assertIn("min", placed_col["dates"])
+            self.assertIn("max", placed_col["dates"])
             # Should be ISO format dates
-            self.assertTrue(placed_col["min"].startswith("2024-"))
-            self.assertTrue(placed_col["max"].startswith("2024-"))
+            self.assertTrue(placed_col["dates"]["min"].startswith("2024-"))
+            self.assertTrue(placed_col["dates"]["max"].startswith("2024-"))
             
             # Check view has columns
             big_orders = tables_by_name["big_orders"]
@@ -262,6 +264,93 @@ class TestSQLiteInspect(unittest.TestCase):
                 conn.execute("PRAGMA query_only=0")
             
             conn.close()
+    
+    def test_column_keys_complete(self):
+        """Test that every column has exactly the required keys."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            required_keys = {
+                "name", "declared_type", "notnull", "pk", "type", "candidate",
+                "share", "missing", "distinct", "distinct_exact", "samples",
+                "numeric", "dates", "top"
+            }
+            
+            for table in result["tables"]:
+                for col in table["columns"]:
+                    col_keys = set(col.keys())
+                    self.assertEqual(
+                        col_keys, required_keys,
+                        f"Column {table['name']}.{col['name']} has wrong keys: {col_keys}"
+                    )
+    
+    def test_customers_no_foreign_keys(self):
+        """Test that customers table has empty foreign_keys list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            customers = tables_by_name["customers"]
+            
+            self.assertEqual(customers["foreign_keys"], [])
+    
+    def test_mixed_94_percent_int(self):
+        """Test mixed column with 94% int shows mixed type with warning."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = mixed_db(tmpdir, 0.94)
+            result = inspect_sqlite(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            table = result["tables"][0]
+            self.assertEqual(table["name"], "m")
+            
+            col = table["columns"][0]
+            self.assertEqual(col["name"], "v")
+            self.assertEqual(col["type"], "mixed")
+            self.assertEqual(col["candidate"], "int")
+            
+            # Check warning
+            self.assertIn("warnings", result)
+            warning_found = any("m.v mixed: 94% int" in w for w in result["warnings"])
+            self.assertTrue(warning_found, f"Expected warning not found in: {result['warnings']}")
+    
+    def test_mixed_96_percent_int(self):
+        """Test mixed column with 96% int shows int type."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = mixed_db(tmpdir, 0.96)
+            result = inspect_sqlite(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            table = result["tables"][0]
+            col = table["columns"][0]
+            
+            self.assertEqual(col["type"], "int")
+            self.assertEqual(col["candidate"], "int")
+    
+    def test_missing_path_raises_error(self):
+        """Test that a missing path raises InspectError."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            missing_path = Path(tmpdir) / "does_not_exist.db"
+            
+            with self.assertRaises(InspectError) as cm:
+                inspect_sqlite(missing_path)
+            
+            self.assertIn("not a file", str(cm.exception))
     
     def test_ro_files_unchanged(self):
         """Test that database files are unchanged after inspection."""

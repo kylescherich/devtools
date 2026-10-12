@@ -2,6 +2,7 @@
 import sqlite3
 import urllib.parse
 import time
+import statistics
 from pathlib import Path
 
 
@@ -24,11 +25,13 @@ def open_readonly(path):
     """
     path = Path(path)
     
-    # Refuse symlinks and non-files
+    # Refuse symlinks, missing paths, and non-files
+    if not path.exists():
+        raise InspectError("not a file")
     if path.is_symlink():
         raise InspectError("symlinks are not allowed")
     if not path.is_file():
-        raise InspectError("path is not a file")
+        raise InspectError("not a file")
     
     # Build read-only URI
     uri = "file:" + urllib.parse.quote(str(path.resolve())) + "?mode=ro&immutable=1"
@@ -73,6 +76,13 @@ def open_readonly(path):
     
     conn.set_authorizer(authorizer)
     
+    # Verify it's a valid SQLite database
+    try:
+        conn.execute("SELECT count(*) FROM sqlite_master")
+    except sqlite3.DatabaseError as e:
+        conn.close()
+        raise InspectError("not a SQLite database") from e
+    
     return conn
 
 
@@ -99,20 +109,21 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
         Dictionary with database analysis including tables, relationships, and warnings
     """
     path = Path(path)
-    result = {
-        "kind": "sqlite",
-        "name": path.name,
-        "size_bytes": path.stat().st_size,
-        "tables": [],
-        "relationships": [],
-        "warnings": []
-    }
     
     conn = None
     timed_out = False
     
     try:
         conn = open_readonly(path)
+        
+        result = {
+            "kind": "sqlite",
+            "name": path.name,
+            "size_bytes": path.stat().st_size,
+            "tables": [],
+            "relationships": [],
+            "warnings": []
+        }
         
         # Set up progress handler for deadline
         if deadline is not None:
@@ -136,29 +147,41 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
             result["warnings"].append("no tables")
         
         for obj_name, obj_type in objects:
+            # Check deadline before each object
+            if deadline is not None and time.monotonic() > deadline:
+                timed_out = True
+                break
+            
             try:
-                table_info = _analyze_table(conn, obj_name, obj_type, max_rows, result["warnings"])
+                table_info = _analyze_table(conn, obj_name, obj_type, max_rows, deadline, result["warnings"])
                 result["tables"].append(table_info)
                 
                 # Collect foreign key relationships
-                for fk in table_info.get("foreign_keys", []):
+                for fk in table_info["foreign_keys"]:
                     relationship = [
                         f"{obj_name}.{fk['from']}",
                         f"{fk['table']}.{fk['to']}"
                     ]
                     result["relationships"].append(relationship)
                     
-            except sqlite3.OperationalError:
-                # Timeout occurred
-                timed_out = True
-                break
+            except sqlite3.OperationalError as e:
+                # Only treat as timeout if deadline is set and passed
+                if deadline is not None and time.monotonic() > deadline:
+                    timed_out = True
+                    break
+                else:
+                    raise
         
-        if timed_out:
+        if timed_out and "timeout: statistics are partial" not in result["warnings"]:
             result["warnings"].append("timeout: statistics are partial")
             
-    except sqlite3.OperationalError:
-        # Timeout during initial queries
-        result["warnings"].append("timeout: statistics are partial")
+    except sqlite3.OperationalError as e:
+        # Only treat as timeout if deadline is set and passed
+        if deadline is not None and time.monotonic() > deadline:
+            if "timeout: statistics are partial" not in result["warnings"]:
+                result["warnings"].append("timeout: statistics are partial")
+        else:
+            raise
         
     finally:
         if conn:
@@ -167,7 +190,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
     return result
 
 
-def _analyze_table(conn, obj_name, obj_type, max_rows, warnings):
+def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
     """Analyze a single table or view."""
     quoted_name = _quote_identifier(obj_name)
     
@@ -196,7 +219,7 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, warnings):
     cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
     pragma_columns = cursor.fetchall()
     
-    # Get foreign keys
+    # Get foreign keys (always include, even if empty)
     cursor = conn.execute(f"PRAGMA foreign_key_list({quoted_name})")
     fk_rows = cursor.fetchall()
     foreign_keys = []
@@ -207,18 +230,20 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, warnings):
             "table": fk_row[2],
             "to": fk_row[4]
         })
-    if foreign_keys:
-        table_info["foreign_keys"] = foreign_keys
+    table_info["foreign_keys"] = foreign_keys
     
-    # Get indexes
+    # Get indexes (always include, even if empty)
     cursor = conn.execute(f"PRAGMA index_list({quoted_name})")
     index_rows = cursor.fetchall()
     indexes = [row[1] for row in index_rows]  # row[1] is the index name
-    if indexes:
-        table_info["indexes"] = indexes
+    table_info["indexes"] = indexes
     
     # Analyze each column
     for col_idx, pragma_col in enumerate(pragma_columns):
+        # Check deadline before each column
+        if deadline is not None and time.monotonic() > deadline:
+            raise sqlite3.OperationalError("deadline exceeded")
+        
         # pragma_col: (cid, name, type, notnull, dflt_value, pk)
         col_name = pragma_col[1]
         declared_type = pragma_col[2]
@@ -233,14 +258,14 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, warnings):
         }
         
         # Analyze column statistics
-        _analyze_column_stats(conn, src_query, col_name, sampled, col_info)
+        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings)
         
         table_info["columns"].append(col_info)
     
     return table_info
 
 
-def _analyze_column_stats(conn, src_query, col_name, sampled, col_info):
+def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings):
     """Analyze statistics for a single column."""
     quoted_col = _quote_identifier(col_name)
     
@@ -265,35 +290,32 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, col_info):
     if total_non_missing == 0:
         col_info["type"] = "text"
         col_info["candidate"] = None
+        col_info["share"] = 0.0
         col_info["distinct"] = 0
         col_info["distinct_exact"] = not sampled
         col_info["samples"] = []
+        col_info["numeric"] = None
+        col_info["dates"] = None
+        col_info["top"] = None
         return
     
-    # Determine type based on typeof() distribution
+    # Calculate shares over non-missing values
     type_shares = {}
     for type_name, cnt in type_counts:
         share = cnt / total_non_missing
         type_shares[type_name] = share
     
     # Map SQLite types to our types
-    int_share = type_shares.get("integer", 0)
-    real_share = type_shares.get("real", 0)
-    text_share = type_shares.get("text", 0)
-    blob_share = type_shares.get("blob", 0)
+    int_share = type_shares.get("integer", 0.0)
+    real_share = type_shares.get("real", 0.0)
+    text_share = type_shares.get("text", 0.0)
+    blob_share = type_shares.get("blob", 0.0)
     
-    # Determine type
-    if blob_share >= 0.95:
-        col_info["type"] = "blob"
-        col_info["candidate"] = "blob"
-    elif int_share >= 0.95:
-        col_info["type"] = "int"
-        col_info["candidate"] = "int"
-    elif int_share + real_share >= 0.95:
-        col_info["type"] = "float"
-        col_info["candidate"] = "float"
-    elif text_share >= 0.95:
-        # Check if it's a date column
+    float_share = int_share + real_share
+    
+    # Check date share for text values
+    date_share = 0.0
+    if text_share > 0:
         cursor = conn.execute(f"""
             SELECT {quoted_col} FROM ({src_query})
             WHERE {quoted_col} IS NOT NULL AND {quoted_col} != ''
@@ -302,19 +324,50 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, col_info):
         """)
         text_values = [row[0] for row in cursor.fetchall()]
         
-        date_count = sum(1 for v in text_values if _is_date_value(str(v)))
-        if text_values and date_count / len(text_values) >= 0.95:
-            col_info["type"] = "date"
-            col_info["candidate"] = "date"
+        if text_values:
+            date_count = sum(1 for v in text_values if _is_date_value(str(v)))
+            date_fraction = date_count / len(text_values)
+            date_share = text_share * date_fraction
+    
+    # Determine type and candidate using the new rules
+    # First check >= 0.95 in order: int, float, date, blob
+    if int_share >= 0.95:
+        col_info["type"] = "int"
+        col_info["candidate"] = "int"
+        col_info["share"] = round(int_share, 3)
+    elif float_share >= 0.95:
+        col_info["type"] = "float"
+        col_info["candidate"] = "float"
+        col_info["share"] = round(float_share, 3)
+    elif date_share >= 0.95:
+        col_info["type"] = "date"
+        col_info["candidate"] = "date"
+        col_info["share"] = round(date_share, 3)
+    elif blob_share >= 0.95:
+        col_info["type"] = "blob"
+        col_info["candidate"] = "blob"
+        col_info["share"] = round(blob_share, 3)
+    else:
+        # Find highest share >= 0.5 (ties: int, float, date, blob order)
+        shares_with_types = [
+            (int_share, "int"),
+            (float_share, "float"),
+            (date_share, "date"),
+            (blob_share, "blob")
+        ]
+        max_share, max_type = max(shares_with_types, key=lambda x: x[0])
+        
+        if max_share >= 0.5:
+            col_info["type"] = "mixed"
+            col_info["candidate"] = max_type
+            col_info["share"] = round(max_share, 3)
+            # Add warning
+            percent = int(round(max_share * 100))
+            warnings.append(f"{obj_name}.{col_name} mixed: {percent}% {max_type}")
         else:
             col_info["type"] = "text"
-            col_info["candidate"] = "text"
-    elif max(int_share, real_share, text_share, blob_share) >= 0.5:
-        col_info["type"] = "mixed"
-        col_info["candidate"] = None
-    else:
-        col_info["type"] = "text"
-        col_info["candidate"] = None
+            col_info["candidate"] = None
+            col_info["share"] = round(text_share, 3)
     
     # Get distinct count
     cursor = conn.execute(f"""
@@ -342,40 +395,35 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, col_info):
             samples.append(value_str)
     col_info["samples"] = samples
     
-    # Numeric statistics for int/float
-    if col_info["type"] in ("int", "float"):
+    # Numeric statistics for int/float/mixed with numeric candidate
+    if col_info["type"] in ("int", "float") or (col_info["type"] == "mixed" and col_info["candidate"] in ("int", "float")):
         cursor = conn.execute(f"""
-            SELECT MIN({quoted_col}), MAX({quoted_col}), AVG({quoted_col})
+            SELECT {quoted_col}
             FROM ({src_query})
             WHERE typeof({quoted_col}) IN ('integer', 'real')
+            ORDER BY {quoted_col}
         """)
-        min_val, max_val, mean_val = cursor.fetchone()
-        if min_val is not None:
-            col_info["min"] = min_val
-            col_info["max"] = max_val
-            col_info["mean"] = mean_val
+        numeric_values = [row[0] for row in cursor.fetchall()]
+        
+        if numeric_values:
+            min_val = min(numeric_values)
+            max_val = max(numeric_values)
+            mean_val = sum(numeric_values) / len(numeric_values)
+            median_val = statistics.median(numeric_values)
             
-            # Get median
-            cursor = conn.execute(f"""
-                SELECT COUNT(*) FROM ({src_query})
-                WHERE typeof({quoted_col}) IN ('integer', 'real')
-            """)
-            numeric_count = cursor.fetchone()[0]
-            
-            if numeric_count > 0:
-                median_offset = numeric_count // 2
-                cursor = conn.execute(f"""
-                    SELECT {quoted_col} FROM ({src_query})
-                    WHERE typeof({quoted_col}) IN ('integer', 'real')
-                    ORDER BY {quoted_col}
-                    LIMIT 1 OFFSET {median_offset}
-                """)
-                median_row = cursor.fetchone()
-                if median_row:
-                    col_info["median"] = median_row[0]
+            col_info["numeric"] = {
+                "min": min_val,
+                "max": max_val,
+                "mean": mean_val,
+                "median": median_val
+            }
+        else:
+            col_info["numeric"] = None
+    else:
+        col_info["numeric"] = None
     
-    # Date statistics
-    if col_info["type"] == "date":
+    # Date statistics for date/mixed with date candidate
+    if col_info["type"] == "date" or (col_info["type"] == "mixed" and col_info["candidate"] == "date"):
         cursor = conn.execute(f"""
             SELECT MIN({quoted_col}), MAX({quoted_col})
             FROM ({src_query})
@@ -383,11 +431,17 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, col_info):
         """)
         min_val, max_val = cursor.fetchone()
         if min_val is not None:
-            col_info["min"] = min_val
-            col_info["max"] = max_val
+            col_info["dates"] = {
+                "min": min_val,
+                "max": max_val
+            }
+        else:
+            col_info["dates"] = None
+    else:
+        col_info["dates"] = None
     
-    # Top values for text/bool/mixed when distinct <= 50
-    if col_info["distinct"] <= 50 and col_info["type"] in ("text", "bool", "mixed"):
+    # Top values for text/mixed when distinct <= 50
+    if col_info["distinct"] <= 50 and col_info["type"] in ("text", "mixed"):
         cursor = conn.execute(f"""
             SELECT {quoted_col}, COUNT(*) as cnt
             FROM ({src_query})
@@ -405,5 +459,6 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, col_info):
                 if len(value_str) > 80:
                     value_str = value_str[:80]
             top_values.append([value_str, count])
-        if top_values:
-            col_info["top"] = top_values
+        col_info["top"] = top_values if top_values else None
+    else:
+        col_info["top"] = None

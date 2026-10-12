@@ -264,3 +264,38 @@ def not_a_db(directory):
         f.write("Just a plain text file.\n")
     
     return path
+
+
+def mixed_db(directory, int_share):
+    """Create a SQLite database with mixed int/text column.
+    
+    Args:
+        directory: Directory to create file in
+        int_share: Fraction of rows that should be integers (0.0 to 1.0)
+        
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / f"mixed_{int(int_share*100)}.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Create table with mixed column
+    conn.execute("CREATE TABLE m (v TEXT)")
+    
+    # Insert 100 rows
+    num_rows = 100
+    num_ints = int(num_rows * int_share)
+    
+    for i in range(num_rows):
+        if i < num_ints:
+            conn.execute("INSERT INTO m (v) VALUES (?)", (i,))
+        else:
+            conn.execute("INSERT INTO m (v) VALUES (?)", (f"word_{i}",))
+    
+    conn.commit()
+    conn.close()
+    
+    return path
