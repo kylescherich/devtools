@@ -28,8 +28,16 @@ LEVEL_WORDS = {
     "INFO": INFO, "NOTICE": INFO,
     "DEBUG": DEBUG, "TRACE": DEBUG,
 }
-_LEVEL_RE = re.compile(r"\b(" + "|".join(sorted(LEVEL_WORDS, key=len, reverse=True))
-                       + r")\b", re.IGNORECASE)
+_WORDS = "|".join(sorted(LEVEL_WORDS, key=len, reverse=True))
+# A level word counts only when it is UPPERCASE, or (any case) inside [..] or
+# <..>, or right after level=/lvl=/severity= (optionally quoted). A plain
+# lowercase word in a message ("no error") never sets the level.
+_LEVEL_RE = re.compile(
+    r"\b(?P<upper>" + _WORDS + r")\b"
+    r"|[\[<]\s*(?i:(?P<bracket>" + _WORDS + r"))\s*[\]>]"
+    r"|(?i:\b(?:level|lvl|severity)=[\"']?(?P<key>" + _WORDS + r"))\b")
+# Any case followed directly by ':' as the first word after the timestamp.
+_LEVEL_COLON_RE = re.compile(r"\s*(?i:(" + _WORDS + r")):")
 
 _ISO_RE = re.compile(
     r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})"
@@ -101,9 +109,17 @@ def normalise_level(word):
 
 
 def find_level(line):
-    """First known level word within the first 64 characters of the line."""
-    match = _LEVEL_RE.search(line[:LEVEL_WINDOW])
-    return LEVEL_WORDS[match.group(1).upper()] if match else UNKNOWN
+    """First level word (see _LEVEL_RE) within the first 64 characters."""
+    window = line[:LEVEL_WINDOW]
+    stamp = _ISO_RE.match(window) or _SYSLOG_RE.match(window)
+    match = _LEVEL_COLON_RE.match(window, stamp.end() if stamp else 0)
+    if match:
+        return LEVEL_WORDS[match.group(1).upper()]
+    match = _LEVEL_RE.search(window)
+    if not match:
+        return UNKNOWN
+    word = match.group("upper") or match.group("bracket") or match.group("key")
+    return LEVEL_WORDS[word.upper()]
 
 
 def _offset(text):
@@ -252,7 +268,7 @@ class _Reader:
                     text = data.decode("utf-8", errors="replace")
                     res.decode_errors += 1
                 if line_no == 1:
-                    text = text.removeprefix("﻿")
+                    text = text.removeprefix("\ufeff")
                 yield line_no, text.rstrip("\r\n")
         finally:
             stream.close()

@@ -87,6 +87,36 @@ class TestLevels(ReaderTestCase):
     def test_level_word_must_be_whole_word(self):
         self.assertEqual(find_level("2026-03-01T10:00:00Z INFORMATION ERRORS"), UNKNOWN)
 
+    def test_uppercase_word_counts(self):
+        self.assertEqual(find_level("2026-03-01T10:00:00Z worker CRITICAL disk"), ERROR)
+        self.assertEqual(find_level("Mar  1 10:00:00 host app NOTICE x"), INFO)
+
+    def test_any_case_in_brackets(self):
+        self.assertEqual(find_level("2026-03-01T10:00:00Z [info] started"), INFO)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z <Error> failed"), ERROR)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z [ warn ] slow"), WARNING)
+
+    def test_any_case_after_level_key(self):
+        self.assertEqual(find_level("2026-03-01T10:00:00Z level=error msg=x"), ERROR)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z lvl=Warn msg=x"), WARNING)
+        self.assertEqual(find_level('2026-03-01T10:00:00Z severity="debug" x'), DEBUG)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z severity='fatal' x"), ERROR)
+
+    def test_any_case_with_colon_as_first_word(self):
+        self.assertEqual(find_level("2026-03-01T10:00:00Z error: disk full"), ERROR)
+        self.assertEqual(find_level("Mar  1 10:00:00 Warning: low memory"), WARNING)
+        self.assertEqual(find_level("info: no timestamp here"), INFO)
+
+    def test_colon_word_must_be_first_after_timestamp(self):
+        self.assertEqual(find_level("2026-03-01T10:00:00Z job error: x"), UNKNOWN)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z error : x"), UNKNOWN)
+
+    def test_plain_lowercase_word_is_not_a_level(self):
+        self.assertEqual(find_level("2026-03-01T10:00:00Z security alert raised"), UNKNOWN)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z no error"), UNKNOWN)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z Error in module"), UNKNOWN)
+        self.assertEqual(find_level("2026-03-01T10:00:00Z loglevel=error x"), UNKNOWN)
+
 
 class TestContinuations(ReaderTestCase):
     def test_lines_without_timestamp_attach_to_previous(self):
@@ -169,7 +199,7 @@ class TestFiles(ReaderTestCase):
         result = read_logs([path])
         self.assertTrue(result.entries)
         self.assertEqual(result.decode_errors, 1)
-        self.assertEqual(result.entries[0].message, "INFO caf�")
+        self.assertEqual(result.entries[0].message, "INFO caf\ufffd")
 
     @unittest.skipUnless(hasattr(os, "symlink"), "no symlinks")
     def test_symlink_refused(self):
