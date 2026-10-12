@@ -7,7 +7,7 @@ from loglens.readers import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, ERROR, LEVEL_
                              WARNING, InputError, UsageError, read_logs)
 from loglens.redact import redact
 from loglens.report import FORMATS, analyse, render
-from loglens.timeline import AUTO, BUCKETS
+from loglens.timeline import AUTO, BUCKETS, MAX_AUTO_BUCKETS, MAX_BUCKETS
 
 EXIT_OK = 0
 EXIT_WARNING = 1
@@ -19,12 +19,16 @@ EPILOG = """\
 exit codes (when several apply: 2 > 3 > 4 > 1 > 0):
   0  no entries at WARNING or above
   1  WARNING entries, none at ERROR or above
-  2  usage error, including a refused --output
+  2  usage error, including a refused --output or a --bucket giving more
+     than 2000 buckets
   3  input missing, unreadable, invalid, a symlink, or over --max-bytes
   4  entries at ERROR or above (ERROR, ERR, CRITICAL, FATAL, ALERT, EMERG)
 
 --output never overwrites an existing file unless --force is given, never
 writes through a symlink, and refuses the directory of any input file.
+
+Timestamps more than 30 days from the median are listed under "warnings"
+and left off the timeline (they still count in their groups).
 
 Raw log lines are never shown unless --raw is given, and everything loglens
 prints passes through redaction.
@@ -61,8 +65,10 @@ def _build_parser():
     parser.add_argument("--format", choices=FORMATS, default="text",
                         help="report format (default: text)")
     parser.add_argument("--bucket", choices=[AUTO, *BUCKETS], default=AUTO,
-                        help="timeline bucket size (default: auto = smallest size "
-                             "giving at most 200 buckets)")
+                        help=f"timeline bucket size (default: auto = smallest size "
+                             f"giving at most {MAX_AUTO_BUCKETS} buckets); an explicit "
+                             f"size giving more than {MAX_BUCKETS} buckets is refused "
+                             "(exit 2) and the smallest size that fits is named")
     parser.add_argument("--context", type=int, default=0, metavar="N",
                         help="signatures of the N entries before and after each "
                              "incident's first occurrence (default: 0)")
@@ -163,7 +169,11 @@ def main(argv=None):
         return _fail(str(exc), EXIT_USAGE)
     except InputError as exc:
         return _fail(str(exc), EXIT_INPUT)
-    report = analyse(result, raw=args.raw, bucket=args.bucket, context=args.context)
+    try:
+        report = analyse(result, raw=args.raw, bucket=args.bucket,
+                         context=args.context)
+    except UsageError as exc:          # --bucket over MAX_BUCKETS
+        return _fail(str(exc), EXIT_USAGE)
     document = render(report, args.format)
     if not args.output:
         _write(sys.stdout, document)

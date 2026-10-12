@@ -215,6 +215,84 @@ class TestTimeline(ReportTestCase):
         self.assertIn("untimed entries (not on the timeline): 1", render(analyse(result)))
 
 
+class TestTimelineBounds(ReportTestCase):
+    def test_bucket_cap_exit_2(self):
+        lines = [f"{iso(T0 + timedelta(hours=h))} ERROR job failed" for h in range(73)]
+        path = fx.write_lines(self.dir, "app.log", lines)       # 3-day span
+        code, out, err = run([path, "--bucket", "1m"])
+        self.assertTrue(err.strip(), "no error message")
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("--bucket 1m gives 4321 buckets (limit 2000)", err)
+        self.assertIn("use --bucket 5m or larger", err)
+        code, out, _ = run([path, "--bucket", "5m"])
+        self.assertTrue(out.strip())
+        self.assertEqual(code, 4)
+        self.assertIn("bucket: 5m\n", out)
+        _, out, _ = run([path])
+        self.assertTrue(out.strip())
+        self.assertIn("bucket: 1h (auto)\n", out)              # auto stays <= 200
+        code, out, err = run(["--help"])
+        self.assertTrue(out.strip())
+        self.assertIn("2000", out)
+
+    def test_outlier_timestamp_excluded(self):
+        lines = ["1970-01-01T00:00:00Z ERROR job 0 failed"]
+        lines += [f"{iso(T0 + timedelta(minutes=15 * i))} ERROR job {i} failed"
+                  for i in range(1, 97)]                        # 1-day span
+        path = fx.write_lines(self.dir, "app.log", lines)
+        result = read_logs([path])
+        tl = build_timeline(result.entries)
+        self.assertEqual(tl.name, "15m")
+        self.assertEqual([e.ts.year for e in tl.outliers], [1970])
+        self.assertEqual(tl.buckets[0].start, int((T0 + timedelta(minutes=15)).timestamp()))
+        self.assertEqual(sum(b.errors for b in tl.buckets), 96)
+        self.assertEqual(analyse(result).groups[0].count, 97)
+        warning = ("1 entry with outlying timestamps (first 1970-01-01T00:00:00Z)")
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertIn(warning, out)
+                self.assertIn("15m (auto)", out)
+                self.assertIn("x97", out)                       # group count includes it
+                self.assertNotIn("1970-01-01T00:00:00Z  E", out)  # not a bucket
+                low = out.lower()
+                self.assertLess(low.index("summary"), low.index("warnings"))
+                self.assertLess(low.index("warnings"), low.index("groups ("))
+
+        clean = fx.write_lines(self.dir, "clean.log", lines[1:])
+        for fmt in FORMATS:
+            _, out, _ = run([clean, "--format", fmt])
+            self.assertTrue(out.strip())
+            self.assertNotIn("outlying", out)
+            section = out[out.lower().index("warnings"):out.lower().index("groups (")]
+            self.assertIn("none", section)
+
+    def test_empty_bucket_runs_collapsed(self):
+        minutes = [0, 1, 12, 13, 18]          # 10 empty (2..11), then 4 empty (14..17)
+        lines = [f"{iso(T0 + timedelta(minutes=m))} ERROR boom" for m in minutes]
+        path = fx.write_lines(self.dir, "app.log", lines)
+        tl = build_timeline(read_logs([path]).entries, "1m")
+        self.assertEqual(len(tl.buckets), 19)                   # spikes see all buckets
+        empty_row = "E      0  W      0"
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt, "--bucket", "1m"])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertEqual(out.count("... 10 empty buckets ..."), 1)
+                self.assertNotIn("... 4 empty buckets ...", out)
+                if fmt == "html":
+                    self.assertIn('<tr><td colspan="3">... 10 empty buckets ...</td></tr>',
+                                  out)
+                    self.assertEqual(out.count('<td class="n">0</td><td class="n">0</td>'), 4)
+                else:
+                    self.assertEqual(out.count(empty_row), 4)
+                    self.assertIn(f"{iso(T0 + timedelta(minutes=1))}  E      1", out)
+                    self.assertIn(f"{iso(T0 + timedelta(minutes=14))}  {empty_row}", out)
+                self.assertIn("threshold", out)                 # 19 >= 10 buckets
+
+
 class TestIncidents(ReportTestCase):
     def _log(self):
         lines, t = [], [T0]

@@ -18,13 +18,14 @@ from datetime import datetime, timezone
 from loglens.group import group_entries
 from loglens.readers import LEVEL_RANK, WARNING
 from loglens.redact import redact
-from loglens.timeline import (AUTO, MIN_SPIKE_BUCKETS, TOP_GROUPS, build_timeline,
-                              incidents)
+from loglens.timeline import (AUTO, MIN_SPIKE_BUCKETS, OUTLIER_SECONDS, TOP_GROUPS,
+                              build_timeline, incidents)
 
 FORMATS = ("text", "md", "html")
 BAR_WIDTH = 50
 SPIKES_IN_SUMMARY = 3
 NO_INCIDENTS = "no warning or error groups"
+MIN_EMPTY_RUN = 5
 
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029"
                      r"\u202a-\u202e\u2066-\u2069]")
@@ -155,6 +156,42 @@ def _bar(total, peak):
     return "#" * max(1, round(total * BAR_WIDTH / peak))
 
 
+def _timeline_rows(tl):
+    """Buckets in order; each run of MIN_EMPTY_RUN or more buckets without
+    ERROR+/WARNING events is replaced by its length (an int). Display only:
+    spike detection always sees every bucket."""
+    rows, run = [], []
+    for b in [*tl.buckets, None]:
+        if b is not None and not b.total:
+            run.append(b)
+            continue
+        rows += [len(run)] if len(run) >= MIN_EMPTY_RUN else run
+        run = []
+        if b is not None:
+            rows.append(b)
+    return rows
+
+
+def _empty_run(count):
+    return f"... {count} empty buckets ..."
+
+
+def _bucket_line(b, peak):
+    return (f"{_bucket_ts(b.start)}  E {b.errors:>6}  W {b.warnings:>6}  "
+            f"{_bar(b.total, peak)}").rstrip()
+
+
+def _warning_lines(tl):
+    if not tl.outliers:
+        return ["none"]
+    count = len(tl.outliers)
+    first = min(e.ts for e in tl.outliers)
+    return [f"{count} {'entry' if count == 1 else 'entries'} with outlying "
+            f"timestamps (first {_ts(first)}); more than "
+            f"{OUTLIER_SECONDS // 86400} days from the median, counted in their "
+            "groups but left off the timeline"]
+
+
 def _size(size):
     return "?" if size is None else f"{size} bytes"
 
@@ -175,6 +212,9 @@ def _render_text(rep):
     _section(out, "summary")
     out.append(e(rep.summary))
 
+    _section(out, "warnings")
+    out += [e(line) for line in _warning_lines(rep.timeline)]
+
     _section(out, f"groups ({len(rep.groups)})")
     out.append(f"{'LEVEL':<8} {'COUNT':>7}  {'FIRST':<20}  {'LAST':<20}  SIGNATURE")
     for g in rep.groups:
@@ -186,9 +226,8 @@ def _render_text(rep):
     if not tl.buckets:
         out.append("no timestamped entries")
     peak = max((b.total for b in tl.buckets), default=0)
-    for b in tl.buckets:
-        out.append(f"{_bucket_ts(b.start)}  E {b.errors:>6}  W {b.warnings:>6}  "
-                   f"{_bar(b.total, peak)}".rstrip())
+    out += [_empty_run(row) if isinstance(row, int) else _bucket_line(row, peak)
+            for row in _timeline_rows(tl)]
 
     _section(out, "spikes")
     out += [e(line) for line in _spike_lines(tl)]
@@ -243,6 +282,9 @@ def _render_md(rep):
 
     out += ["", "## Summary", "", e(rep.summary)]
 
+    out += ["", "## Warnings", ""]
+    out += [f"- {e(line)}" for line in _warning_lines(rep.timeline)]
+
     out += ["", f"## Groups ({len(rep.groups)})", ""]
     out += ["| level | count | first | last | signature |",
             "| --- | ---: | --- | --- | --- |"]
@@ -257,8 +299,8 @@ def _render_md(rep):
     else:
         peak = max(b.total for b in tl.buckets)
         out.append("```")
-        out += [f"{_bucket_ts(b.start)}  E {b.errors:>6}  W {b.warnings:>6}  "
-                f"{_bar(b.total, peak)}".rstrip() for b in tl.buckets]
+        out += [_empty_run(row) if isinstance(row, int) else _bucket_line(row, peak)
+                for row in _timeline_rows(tl)]
         out.append("```")
 
     out += ["", "## Spikes", ""]
@@ -348,6 +390,9 @@ def _render_html(rep):
     out += [f"<tr><th>{e(label)}</th><td>{e(value)}</td></tr>"
             for label, value in rep.header]
     out += ["</table>", "<h2>Summary</h2>", f"<p>{e(rep.summary)}</p>"]
+    out += ["<h2>Warnings</h2>", "<ul>"]
+    out += [f"<li>{e(line)}</li>" for line in _warning_lines(rep.timeline)]
+    out.append("</ul>")
 
     out += [f"<h2>Groups ({len(rep.groups)})</h2>", "<table>",
             "<tr><th>level</th><th>count</th><th>first</th><th>last</th>"
@@ -367,6 +412,15 @@ def _render_html(rep):
         out += _svg(tl)
         out.append(f"<p>{len(tl.buckets)} buckets from {_bucket_ts(tl.buckets[0].start)} "
                    f"to {_bucket_ts(tl.buckets[-1].start)}</p>")
+        out += ["<table>", "<tr><th>bucket</th><th>E</th><th>W</th></tr>"]
+        for row in _timeline_rows(tl):
+            if isinstance(row, int):
+                out.append(f'<tr><td colspan="3">{_empty_run(row)}</td></tr>')
+            else:
+                out.append(f"<tr><td>{_bucket_ts(row.start)}</td>"
+                           f'<td class="n">{row.errors}</td>'
+                           f'<td class="n">{row.warnings}</td></tr>')
+        out.append("</table>")
 
     out += ["<h2>Spikes</h2>", "<ul>"]
     out += [f"<li>{e(line)}</li>" for line in _spike_lines(tl)]

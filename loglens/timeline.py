@@ -1,18 +1,22 @@
 """Timeline buckets, spike detection and the incident view.
 
 Buckets are aligned to multiples of their size since the UTC epoch; entries
-without a timestamp never reach the timeline.
+without a timestamp never reach the timeline, and neither do entries more
+than 30 days from the median timestamp (outliers; they still count in their
+groups).
 """
 from dataclasses import dataclass, field
 from statistics import median
 
 from loglens.group import entry_signature
-from loglens.readers import ERROR, LEVEL_RANK, WARNING
+from loglens.readers import ERROR, LEVEL_RANK, WARNING, UsageError
 from loglens.redact import redact
 
 BUCKETS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "6h": 21600, "1d": 86400}
 AUTO = "auto"
 MAX_AUTO_BUCKETS = 200
+MAX_BUCKETS = 2000
+OUTLIER_SECONDS = 30 * 86400
 MIN_SPIKE_BUCKETS = 10
 SPIKE_MADS = 3
 TOP_GROUPS = 5
@@ -36,6 +40,7 @@ class Timeline:
     buckets: list
     spikes: list | None           # None: fewer than MIN_SPIKE_BUCKETS buckets
     threshold: float | None = None
+    outliers: list = field(default_factory=list)   # timed, but left off the timeline
 
 
 @dataclass
@@ -60,18 +65,43 @@ def _span(first, last, size):
     return last // size - first // size + 1
 
 
+def split_outliers(entries):
+    """(inliers, outliers): outliers are more than OUTLIER_SECONDS before or
+    after the median timestamp. Both keep the input order."""
+    if not entries:
+        return [], []
+    mid = median(_epoch(e.ts) for e in entries)
+    inliers, outliers = [], []
+    for entry in entries:
+        far = abs(_epoch(entry.ts) - mid) > OUTLIER_SECONDS
+        (outliers if far else inliers).append(entry)
+    return inliers, outliers
+
+
+def _smallest_fit(first, last, limit):
+    for name, size in BUCKETS.items():
+        if _span(first, last, size) <= limit:
+            return name, size
+    return None
+
+
 def choose_bucket(entries, spec=AUTO):
     """(name, seconds) for --bucket; auto is the smallest size giving at most
-    MAX_AUTO_BUCKETS buckets between the first and last timestamp."""
-    if spec != AUTO:
-        return spec, BUCKETS[spec]
+    MAX_AUTO_BUCKETS buckets between the first and last timestamp. An
+    explicit size giving more than MAX_BUCKETS buckets is a UsageError."""
     if not entries:
-        return "-", 0
+        return (spec, BUCKETS[spec]) if spec != AUTO else ("-", 0)
     first, last = _epoch(entries[0].ts), _epoch(entries[-1].ts)
-    for name, size in BUCKETS.items():
-        if _span(first, last, size) <= MAX_AUTO_BUCKETS:
-            return name, size
-    return "1d", BUCKETS["1d"]
+    if spec != AUTO:
+        count = _span(first, last, BUCKETS[spec])
+        if count > MAX_BUCKETS:
+            fit = _smallest_fit(first, last, MAX_BUCKETS)
+            hint = (f"use --bucket {fit[0]} or larger" if fit
+                    else "no bucket size fits")
+            raise UsageError(f"--bucket {spec} gives {count} buckets (limit "
+                             f"{MAX_BUCKETS}); {hint}")
+        return spec, BUCKETS[spec]
+    return _smallest_fit(first, last, MAX_AUTO_BUCKETS) or ("1d", BUCKETS["1d"])
 
 
 def detect_spikes(buckets):
@@ -87,10 +117,12 @@ def detect_spikes(buckets):
 
 
 def build_timeline(entries, spec=AUTO):
-    """entries: timestamped and already in timeline order."""
+    """entries: timestamped and already in timeline order. Outliers are set
+    aside before the bucket size, the span and the spikes are worked out."""
+    entries, outliers = split_outliers(entries)
     name, size = choose_bucket(entries, spec)
     if not entries:
-        return Timeline(name, size, [], None)
+        return Timeline(name, size, [], None, outliers=outliers)
     first = _epoch(entries[0].ts) // size
     last = _epoch(entries[-1].ts) // size
     buckets = [Bucket((first + i) * size) for i in range(last - first + 1)]
@@ -103,7 +135,7 @@ def build_timeline(entries, spec=AUTO):
             bucket.errors += 1
         else:
             bucket.warnings += 1
-    return Timeline(name, size, buckets, *detect_spikes(buckets))
+    return Timeline(name, size, buckets, *detect_spikes(buckets), outliers=outliers)
 
 
 def incidents(groups, sequence, *, context=0, raw=False):

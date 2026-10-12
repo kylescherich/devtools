@@ -83,10 +83,19 @@ loglens export.log --input-format jsonl --field message=text --field ts=when
 Every report has the same sections in all three formats: a header (files and
 sizes, lines read, entries, untimed entries, invalid JSONL lines, replaced
 non-UTF-8 bytes, sampling, syslog year, bucket size, raw lines on/off,
-redaction on), a one-sentence summary, the groups table, the timeline,
+redaction on), a one-sentence summary, warnings, the groups table, the timeline,
 spikes, the incident view (the top 5 WARNING+ groups by count; INFO and
 DEBUG groups appear only in the groups table) and, only with `--raw`,
 examples.
+Timeline bounds: `--bucket auto` picks the smallest size giving at most 200
+buckets; an explicit `--bucket` giving more than 2,000 buckets is refused with
+exit 2 and the message names the smallest size that fits. Entries more than
+30 days before or after the median timestamp are outliers: they still count
+in their groups, but are left off the timeline, its span and spike detection,
+and the warnings section reports them ("none" when there are none). Runs of 5
+or more buckets without WARNING+ events are shown as one "... N empty buckets
+..." line (one row in HTML).
+
 Reports are reproducible: the same inputs and arguments (including `--year`)
 give byte-identical output; the current date or time never appears.
 
@@ -116,6 +125,6 @@ When several apply, the leftmost wins: 2 > 3 > 4 > 1 > 0.
 | --- | --- |
 | 0 | no entries at WARNING or above |
 | 1 | WARNING entries, none at ERROR or above |
-| 2 | usage error, including a refused `--output` |
+| 2 | usage error, including a refused `--output` or a `--bucket` over 2,000 buckets |
 | 3 | input missing, unreadable, invalid, a symlink, or over `--max-bytes` |
 | 4 | entries at ERROR or above (ERROR, ERR, CRITICAL, FATAL, ALERT, EMERG) |
