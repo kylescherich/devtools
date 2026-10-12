@@ -2,7 +2,7 @@
 
 ## Status
 - BRIEF-DEVWS-015 task 1 (bootstrap) done: package `repo_xray`, console script `repo-xray`, CLI prints usage and exits 2, one unittest.
-- No analysis code yet.
+- BRIEF-DEVWS-015 task 2 (analyzer) done: file walk + ast extraction into dict model; fixture package with relative imports, star import, importlib call, class with methods, test file; all tests passing.
 
 ## Next tasks (BRIEF-DEVWS-015, branch devtools/repo-xray-mvp)
 2. Analyzer: file walk + ast extraction into a plain dict model (packages, modules, entry points, classes, functions with signatures and first docstring line, imports). Fixture package under tests/fixtures/ covering relative imports, a star import, an importlib call, a class with methods, and a test file that imports two modules.
