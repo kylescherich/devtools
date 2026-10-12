@@ -12,6 +12,7 @@ def main(argv=None):
     parser.add_argument("--output", help="Output file path")
     parser.add_argument("--format", choices=["html", "md"], default="html", help="Output format")
     parser.add_argument("--max-files", type=int, default=2000, help="Maximum number of files to process")
+    parser.add_argument("--no-docstrings", action="store_true", help="Omit docstrings from report")
     
     args = parser.parse_args(argv)
     
@@ -42,10 +43,11 @@ def main(argv=None):
     
     # Render the report
     title = target.name
+    docstrings = not args.no_docstrings
     if args.format == "html":
-        content = render_html(model, title)
+        content = render_html(model, title, docstrings=docstrings)
     else:
-        content = render_markdown(model, title)
+        content = render_markdown(model, title, docstrings=docstrings)
     
     # Write the output file
     try:

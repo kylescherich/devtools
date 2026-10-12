@@ -257,3 +257,73 @@ class TestE2E(unittest.TestCase):
             
             # Verify counts match
             self.assertEqual(line_count, expected_edge_count)
+    
+    def test_no_docstrings_canary(self):
+        """Test --no-docstrings flag omits docstrings but keeps names and signatures."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir = Path(tmpdir)
+            
+            # Create test package
+            pkg_dir = tmpdir / 'pkg'
+            pkg_dir.mkdir()
+            
+            (pkg_dir / '__init__.py').write_text('', encoding='utf-8')
+            
+            c_py_content = '''"""CANARY-MOD-7f3a"""
+
+class C:
+    """CANARY-CLS-7f3a"""
+    
+    def m(self):
+        """CANARY-MTH-7f3a"""
+        pass
+
+def f():
+    """CANARY-FN-7f3a"""
+    pass
+'''
+            (pkg_dir / 'c.py').write_text(c_py_content, encoding='utf-8')
+            
+            # Test with --no-docstrings (HTML)
+            output_html = tmpdir / 'out_no_doc.html'
+            result = self._run_cli([str(pkg_dir), '--output', str(output_html), '--no-docstrings'], cwd=tmpdir)
+            
+            self.assertEqual(result.returncode, 0)
+            
+            html_content = output_html.read_text(encoding='utf-8')
+            self.assertNotEqual(html_content, "")
+            
+            # Should NOT contain any CANARY strings
+            self.assertNotIn('CANARY', html_content)
+            
+            # Should still contain module name and function name
+            self.assertIn('pkg.c', html_content)
+            self.assertIn('f()', html_content)
+            
+            # Test with --no-docstrings (Markdown)
+            output_md = tmpdir / 'out_no_doc.md'
+            result = self._run_cli([str(pkg_dir), '--output', str(output_md), '--format', 'md', '--no-docstrings'], cwd=tmpdir)
+            
+            self.assertEqual(result.returncode, 0)
+            
+            md_content = output_md.read_text(encoding='utf-8')
+            self.assertNotEqual(md_content, "")
+            
+            # Should NOT contain any CANARY strings
+            self.assertNotIn('CANARY', md_content)
+            
+            # Should still contain module name and function name
+            self.assertIn('pkg.c', md_content)
+            self.assertIn('f()', md_content)
+            
+            # Test WITHOUT --no-docstrings (positive control)
+            output_with_doc = tmpdir / 'out_with_doc.html'
+            result = self._run_cli([str(pkg_dir), '--output', str(output_with_doc)], cwd=tmpdir)
+            
+            self.assertEqual(result.returncode, 0)
+            
+            html_with_doc = output_with_doc.read_text(encoding='utf-8')
+            self.assertNotEqual(html_with_doc, "")
+            
+            # Should contain the function docstring
+            self.assertIn('CANARY-FN-7f3a', html_with_doc)

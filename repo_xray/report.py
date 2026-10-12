@@ -319,12 +319,13 @@ def _render_svg_graph(model):
     return '\n'.join(svg_parts)
 
 
-def render_markdown(model, title):
+def render_markdown(model, title, docstrings=True):
     """Render model as Markdown report.
     
     Args:
         model: Analyzer model dict
         title: Report title
+        docstrings: Include docstrings in output
     
     Returns:
         str: Markdown document
@@ -374,7 +375,7 @@ def render_markdown(model, title):
         lines.append(f"**Path:** {_escape_markdown(mod_info['path'])}")
         lines.append("")
         
-        if mod_info.get('docstring'):
+        if docstrings and mod_info.get('docstring'):
             lines.append(_escape_markdown(mod_info['docstring']))
             lines.append("")
         
@@ -387,13 +388,13 @@ def render_markdown(model, title):
                 if cls.get('bases'):
                     bases_str = f"({_escape_markdown(', '.join(cls['bases']))})"
                 lines.append(f"- `{_escape_markdown(cls['name'])}{bases_str}`")
-                if cls.get('docstring'):
+                if docstrings and cls.get('docstring'):
                     lines.append(f"  - {_escape_markdown(cls['docstring'])}")
                 
                 for method in cls.get('methods', []):
                     sig = _escape_markdown(f"{method['name']}{method['signature']}")
                     lines.append(f"  - `{sig}`")
-                    if method.get('docstring'):
+                    if docstrings and method.get('docstring'):
                         lines.append(f"    - {_escape_markdown(method['docstring'])}")
             lines.append("")
         
@@ -404,7 +405,7 @@ def render_markdown(model, title):
             for func in mod_info['functions']:
                 sig = _escape_markdown(f"{func['name']}{func['signature']}")
                 lines.append(f"- `{sig}`")
-                if func.get('docstring'):
+                if docstrings and func.get('docstring'):
                     lines.append(f"  - {_escape_markdown(func['docstring'])}")
             lines.append("")
         
@@ -498,12 +499,13 @@ def render_markdown(model, title):
     return '\n'.join(lines)
 
 
-def render_html(model, title):
+def render_html(model, title, docstrings=True):
     """Render model as self-contained HTML report.
     
     Args:
         model: Analyzer model dict
         title: Report title
+        docstrings: Include docstrings in output
     
     Returns:
         str: HTML document
@@ -580,7 +582,7 @@ def render_html(model, title):
         lines.append(f'<h3 id="{anchor}">{_escape_html(mod_name)}</h3>')
         lines.append(f'<p><strong>Path:</strong> {_escape_html(mod_info["path"])}</p>')
         
-        if mod_info.get('docstring'):
+        if docstrings and mod_info.get('docstring'):
             lines.append(f'<p>{_escape_html(mod_info["docstring"])}</p>')
         
         # Classes
@@ -592,7 +594,7 @@ def render_html(model, title):
                 if cls.get('bases'):
                     bases_str = f"({_escape_html(', '.join(cls['bases']))})"
                 lines.append(f'<li><code>{_escape_html(cls["name"])}{bases_str}</code>')
-                if cls.get('docstring'):
+                if docstrings and cls.get('docstring'):
                     lines.append(f'<ul><li>{_escape_html(cls["docstring"])}</li></ul>')
                 
                 if cls.get('methods'):
@@ -600,7 +602,7 @@ def render_html(model, title):
                     for method in cls['methods']:
                         sig = _escape_html(f"{method['name']}{method['signature']}")
                         lines.append(f'<li><code>{sig}</code>')
-                        if method.get('docstring'):
+                        if docstrings and method.get('docstring'):
                             lines.append(f'<ul><li>{_escape_html(method["docstring"])}</li></ul>')
                         lines.append('</li>')
                     lines.append('</ul>')
@@ -615,7 +617,7 @@ def render_html(model, title):
             for func in mod_info['functions']:
                 sig = _escape_html(f"{func['name']}{func['signature']}")
                 lines.append(f'<li><code>{sig}</code>')
-                if func.get('docstring'):
+                if docstrings and func.get('docstring'):
                     lines.append(f'<ul><li>{_escape_html(func["docstring"])}</li></ul>')
                 lines.append('</li>')
             lines.append('</ul>')
