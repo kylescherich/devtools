@@ -3,6 +3,7 @@
 Files are opened read-only, never through a symlink, and decoded as UTF-8 with
 errors="replace". Nothing here prints; callers render through loglens.redact.
 """
+import codecs
 import gzip
 import json
 import os
@@ -92,10 +93,14 @@ class ReadResult:
     lines_read: int = 0
     bytes_read: int = 0
     decode_errors: int = 0        # lines that held non-UTF-8 bytes
+    replaced_bytes: int = 0       # non-UTF-8 bytes replaced by U+FFFD
+    file_sizes: dict = field(default_factory=dict)            # file -> bytes on disk
     invalid_json: int = 0
     invalid_json_lines: dict = field(default_factory=dict)   # file -> first 3 line_nos
     sampled: bool = False
     max_lines: int = DEFAULT_MAX_LINES
+    year: int = 0                 # year applied to syslog timestamps
+    syslog_used: bool = False     # any syslog timestamp parsed (year matters)
 
     @property
     def sampled_note(self):
@@ -152,6 +157,10 @@ def parse_line_timestamp(line, year):
     ts, end = _iso_at(line)
     if ts is not None:
         return ts, end
+    return _syslog_at(line, year)
+
+
+def _syslog_at(line, year):
     match = _SYSLOG_RE.match(line)
     if match:
         month, day, hour, minute, second = match.groups()
@@ -224,6 +233,29 @@ def _open_nofollow(path):
     return raw, raw
 
 
+_replaced = [0]
+
+
+def _count_replace(exc):
+    _replaced[0] += exc.end - exc.start
+    return "\ufffd", exc.end
+
+
+codecs.register_error("loglens-count-replace", _count_replace)
+
+
+def _decode(data):
+    """UTF-8 with U+FFFD replacement, as errors="replace" does, plus the
+    number of bytes that were replaced."""
+    try:
+        return data.decode("utf-8"), 0
+    except UnicodeDecodeError:
+        pass
+    _replaced[0] = 0
+    text = data.decode("utf-8", errors="loglens-count-replace")
+    return text, _replaced[0]
+
+
 def _is_jsonl_name(path):
     name = str(path).lower()
     if name.endswith(".gz"):
@@ -238,7 +270,8 @@ class _Reader:
         self.max_bytes = max_bytes
         self.max_lines = max_lines
         self.fmt = fmt
-        self.result = ReadResult(entries=[], untimed=[], files=[], max_lines=max_lines)
+        self.result = ReadResult(entries=[], untimed=[], files=[], max_lines=max_lines,
+                                 year=self.year)
 
     def _lines(self, path):
         """Yield (line_no, decoded line) within the byte and line guards."""
@@ -262,11 +295,10 @@ class _Reader:
                     raise InputError(f"input exceeds --max-bytes ({self.max_bytes} bytes)")
                 line_no += 1
                 res.lines_read += 1
-                try:
-                    text = data.decode("utf-8")
-                except UnicodeDecodeError:
-                    text = data.decode("utf-8", errors="replace")
+                text, replaced = _decode(data)
+                if replaced:
                     res.decode_errors += 1
+                    res.replaced_bytes += replaced
                 if line_no == 1:
                     text = text.removeprefix("\ufeff")
                 yield line_no, text.rstrip("\r\n")
@@ -288,7 +320,11 @@ class _Reader:
     def _read_text(self, path):
         current = None
         for line_no, line in self._lines(path):
-            ts, end = parse_line_timestamp(line, self.year)
+            ts, end = _iso_at(line)
+            if ts is None:
+                ts, end = _syslog_at(line, self.year)
+                if ts is not None:
+                    self.result.syslog_used = True
             if ts is None:
                 if not line.strip():
                     continue
@@ -355,6 +391,7 @@ def read_logs(paths, *, year=None, fields=None, max_bytes=DEFAULT_MAX_BYTES,
             continue                    # reported by _open_nofollow below
         if stat.S_ISREG(info.st_mode):
             total += info.st_size
+            res.file_sizes[str(path)] = info.st_size
     if total > max_bytes:
         raise InputError(f"input exceeds --max-bytes ({max_bytes} bytes)")
 

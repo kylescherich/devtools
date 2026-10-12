@@ -42,7 +42,7 @@ class TestLoglensCliStub(unittest.TestCase):
             self.assertTrue(out)
             self.assertIn("INFO", out)
             self.assertIn("jsonl body", out)
-            self.assertNotIn("invalid JSON", out)
+            self.assertIn("invalid JSONL lines: 0\n", out)
 
     def test_format_no_longer_selects_input_format(self):
         code, _, err = run(["--format", "jsonl", "x.log"])

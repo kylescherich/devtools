@@ -82,14 +82,23 @@ class Group:
     examples: list = field(default_factory=list)   # redacted; rendered only with --raw
 
 
+def _redacted_signature(entry):
+    message = redact(entry.message)
+    continuation = redact_lines(entry.continuation_lines)
+    return message, continuation, traceback_signature(continuation) or normalise(message)
+
+
+def entry_signature(entry):
+    """The signature an entry is grouped under (computed from redacted text)."""
+    return _redacted_signature(entry)[2]
+
+
 def group_entries(entries, *, keep_examples=False):
     """Group entries by (level, signature). Messages are redacted before
     normalising; examples are kept only when keep_examples is set."""
     groups = {}
     for entry in entries:
-        message = redact(entry.message)
-        continuation = redact_lines(entry.continuation_lines)
-        signature = traceback_signature(continuation) or normalise(message)
+        message, continuation, signature = _redacted_signature(entry)
         key = (entry.level, signature)
         group = groups.get(key)
         if group is None:

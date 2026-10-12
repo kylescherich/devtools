@@ -5,10 +5,19 @@ import re
 REDACTED = "<redacted>"
 
 _KEYS = r"(?:password|passwd|secret|token|api_key|api-key|apikey)"
+# The marker as reports print it: plain, or HTML-escaped in md/html output.
+_MARK = r"(?:<redacted>|&lt;redacted&gt;)"
+# Skip a value that already is just the marker, up to where the rule would
+# stop anyway. Replacing it would change nothing, except that an escaped
+# marker would turn into a raw tag; so the final pass over a rendered report
+# leaves it alone. Possessive quantifiers before it stop backtracking around it.
+_DONE_AUTH = r"(?!" + _MARK + r"(?:[\"'\r\n]|\Z))"
+_DONE_KEY = (r"(?!(?P<dq>[\"'])" + _MARK + r"(?P=dq)"
+             r"|" + _MARK + r"(?:[\s,;&\"'}\]]|\Z))")
 
 
 def _keep_quotes(match):
-    quote = match.group(2) or match.group(3) or ""
+    quote = match.group("q2") or match.group("q1") or ""
     return match.group(1) + quote + REDACTED + quote
 
 
@@ -18,12 +27,13 @@ _RULES = [
     (re.compile(r"-----BEGIN [A-Z0-9 ]*-----.*?(?:-----END [A-Z0-9 ]*-----|\Z)",
                 re.DOTALL), REDACTED),
     # Authorization header value (any scheme), plain or quoted.
-    (re.compile(r"(?i)(authorization[\"']?\s*[:=]\s*[\"']?)[^\"'\r\n]+"),
+    (re.compile(r"(?i)(authorization[\"']?\s*+[:=]\s*+[\"']?+)" + _DONE_AUTH
+                + r"[^\"'\r\n]+"),
      r"\1" + REDACTED),
     (re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1" + REDACTED),
     # key=value, key: value, "key": "value", 'key': 'value' (quotes kept).
-    (re.compile(r"(?i)(" + _KEYS + r"[\"']?\s*[:=]\s*)"
-                r"(?:(\")(?:[^\"\\\r\n]|\\.)*\"|(')(?:[^'\\\r\n]|\\.)*'"
+    (re.compile(r"(?i)(" + _KEYS + r"[\"']?\s*+[:=]\s*+)" + _DONE_KEY
+                + r"(?:(?P<q2>\")(?:[^\"\\\r\n]|\\.)*\"|(?P<q1>')(?:[^'\\\r\n]|\\.)*'"
                 r"|[^\s,;&\"'}\]]+)"),
      _keep_quotes),
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{10,}"), REDACTED),

@@ -7,7 +7,7 @@ from loglens.cli import main
 from loglens.group import group_entries, normalise, traceback_signature
 from loglens.readers import INFO, read_logs
 from loglens.redact import REDACTED, redact
-from loglens.report import render_text
+from loglens.report import analyse, render
 from tests import loglens_fixtures as fx
 
 TS = "2026-03-01T10:00:{:02d}Z"
@@ -182,8 +182,7 @@ class TestRedaction(GroupTestCase):
 
         result = read_logs([path])
         for raw in (False, True):
-            groups = group_entries(result.entries, keep_examples=raw)
-            text = render_text(groups, result, raw=raw)
+            text = render(analyse(result, raw=raw))
             self.assertTrue(text.strip(), "rendered report is empty")
             for sentinel in self._sentinels():
                 self.assertNotIn(sentinel, text, f"raw={raw}: {sentinel} leaked")

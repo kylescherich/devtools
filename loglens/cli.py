@@ -1,11 +1,11 @@
 import argparse
 import sys
 
-from loglens.group import group_entries
 from loglens.readers import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, InputError,
                              UsageError, read_logs)
 from loglens.redact import redact
-from loglens.report import render_text
+from loglens.report import FORMATS, analyse, render
+from loglens.timeline import AUTO, BUCKETS
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -45,6 +45,14 @@ def _build_parser():
     parser.add_argument("--raw", action="store_true",
                         help="include up to 2 redacted raw examples per group "
                              "(off by default)")
+    parser.add_argument("--format", choices=FORMATS, default="text",
+                        help="report format (default: text)")
+    parser.add_argument("--bucket", choices=[AUTO, *BUCKETS], default=AUTO,
+                        help="timeline bucket size (default: auto = smallest size "
+                             "giving at most 200 buckets)")
+    parser.add_argument("--context", type=int, default=0, metavar="N",
+                        help="signatures of the N entries before and after each "
+                             "incident's first occurrence (default: 0)")
     parser.add_argument("--input-format", choices=["auto", "text", "jsonl"],
                         default="auto",
                         help="input format (default: jsonl for .jsonl/.ndjson, "
@@ -80,6 +88,8 @@ def main(argv=None):
         return _fail(str(exc), EXIT_USAGE)
     except SystemExit as exc:          # --help
         return exc.code if isinstance(exc.code, int) else EXIT_USAGE
+    if args.context < 0:
+        return _fail("--context must be at least 0", EXIT_USAGE)
     try:
         result = read_logs(args.files, year=args.year, fields=args.field,
                            max_bytes=args.max_bytes, max_lines=args.max_lines,
@@ -88,6 +98,6 @@ def main(argv=None):
         return _fail(str(exc), EXIT_USAGE)
     except InputError as exc:
         return _fail(str(exc), EXIT_INPUT)
-    groups = group_entries(result.entries + result.untimed, keep_examples=args.raw)
-    _write(sys.stdout, render_text(groups, result, raw=args.raw))
+    report = analyse(result, raw=args.raw, bucket=args.bucket, context=args.context)
+    _write(sys.stdout, render(report, args.format))
     return EXIT_OK
