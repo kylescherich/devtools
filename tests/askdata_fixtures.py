@@ -200,6 +200,84 @@ def fk_db(directory):
     return path
 
 
+def wal_db(directory):
+    """Create a SQLite database in WAL mode with an open writer.
+    
+    Returns tuple of (path, writer_connection).
+    The caller must close the writer connection.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "wal.db"
+    
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t (id INTEGER PRIMARY KEY, v TEXT)")
+    
+    # Insert 10 rows and commit
+    for i in range(10):
+        conn.execute("INSERT INTO t (v) VALUES (?)", (f"value_{i}",))
+    conn.commit()
+    
+    # Return path and open connection
+    return path, conn
+
+
+def fts_db(directory):
+    """Create a SQLite database with FTS5 table and regular table.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "fts.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Create FTS5 table
+    conn.execute("CREATE VIRTUAL TABLE docs USING fts5(body)")
+    conn.execute("INSERT INTO docs (body) VALUES ('first document')")
+    conn.execute("INSERT INTO docs (body) VALUES ('second document')")
+    conn.execute("INSERT INTO docs (body) VALUES ('third document')")
+    
+    # Create regular table
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t (x) VALUES (42)")
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def hostile_view_db(directory):
+    """Create a SQLite database with hostile views that try to execute dangerous operations.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "hostile_view.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Create regular table
+    conn.execute("CREATE TABLE t (x INTEGER)")
+    conn.execute("INSERT INTO t (x) VALUES (1)")
+    
+    # Create hostile views
+    conn.execute("CREATE VIEW bad AS SELECT load_extension('x') AS y")
+    conn.execute("CREATE VIEW bad2 AS SELECT writefile('/tmp/askdata-should-not-exist', 'a') AS y")
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
 def empty_db(directory):
     """Create a valid SQLite database with no tables.
     
@@ -302,6 +380,168 @@ def mixed_db(directory, int_share):
             conn.execute("INSERT INTO m (v) VALUES (?)", (i,))
         else:
             conn.execute("INSERT INTO m (v) VALUES (?)", (f"word_{i}",))
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def privacy_csv(directory):
+    """Create a CSV with privacy-sensitive data (30 rows).
+    
+    Columns: id (int), email, secret (cycling tokens), acct (16-digit int).
+    
+    Returns path to the created file.
+    """
+    directory = Path(directory)
+    path = directory / "privacy.csv"
+    
+    import string
+    import random
+    
+    # Seed for reproducibility
+    random.seed(42)
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write("id,email,secret,acct\n")
+        
+        for i in range(30):
+            email = f"user{i}@example.com"
+            
+            # Cycle through 3 types of secrets
+            if i % 3 == 0:
+                # GitHub token: ghp_ + 36 alphanumeric
+                secret = "ghp_" + ''.join(random.choices(string.ascii_letters + string.digits, k=36))
+            elif i % 3 == 1:
+                # OpenAI key: sk- + 32 alphanumeric
+                secret = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+            else:
+                # 16-digit number as text
+                secret = ''.join(random.choices(string.digits, k=16))
+            
+            # Account number: 16-digit integer starting at 4000000000000000
+            acct = 4000000000000000 + i
+            
+            f.write(f"{i},{email},{secret},{acct}\n")
+    
+    return path
+
+
+def privacy_db(directory):
+    """Create a SQLite database with privacy-sensitive data (30 rows).
+    
+    Columns: id (int), email, secret (cycling tokens), acct (16-digit int).
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    import string
+    import random
+    
+    directory = Path(directory)
+    path = directory / "privacy.db"
+    
+    # Seed for reproducibility
+    random.seed(42)
+    
+    conn = sqlite3.connect(str(path))
+    
+    conn.execute("""
+        CREATE TABLE sensitive (
+            id INTEGER PRIMARY KEY,
+            email TEXT,
+            secret TEXT,
+            acct INTEGER
+        )
+    """)
+    
+    for i in range(30):
+        email = f"user{i}@example.com"
+        
+        # Cycle through 3 types of secrets
+        if i % 3 == 0:
+            # GitHub token: ghp_ + 36 alphanumeric
+            secret = "ghp_" + ''.join(random.choices(string.ascii_letters + string.digits, k=36))
+        elif i % 3 == 1:
+            # OpenAI key: sk- + 32 alphanumeric
+            secret = "sk-" + ''.join(random.choices(string.ascii_letters + string.digits, k=32))
+        else:
+            # 16-digit number as text
+            secret = ''.join(random.choices(string.digits, k=16))
+        
+        # Account number: 16-digit integer starting at 4000000000000000
+        acct = 4000000000000000 + i
+        
+        conn.execute(
+            "INSERT INTO sensitive (id, email, secret, acct) VALUES (?, ?, ?, ?)",
+            (i, email, secret, acct)
+        )
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def headerless_csv(directory):
+    """Create a headerless CSV with 20 rows of three integers.
+    
+    Returns path to the created file.
+    """
+    directory = Path(directory)
+    path = directory / "headerless.csv"
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        for i in range(20):
+            f.write(f"{i},{i*10},{i*100}\n")
+    
+    return path
+
+
+def order_db(directory):
+    """Create a SQLite database to test row ordering.
+    
+    - Table r(id INTEGER PRIMARY KEY, v INTEGER) with ids 1..100 inserted in reverse, v = id
+    - Table w(k TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID with k "k000".."k099" inserted in reverse, v = number
+    - View rv AS SELECT v FROM r
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "order.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Table r with rowid
+    conn.execute("""
+        CREATE TABLE r (
+            id INTEGER PRIMARY KEY,
+            v INTEGER
+        )
+    """)
+    
+    # Insert in reverse order
+    for i in range(100, 0, -1):
+        conn.execute("INSERT INTO r (id, v) VALUES (?, ?)", (i, i))
+    
+    # Table w WITHOUT ROWID
+    conn.execute("""
+        CREATE TABLE w (
+            k TEXT PRIMARY KEY,
+            v INTEGER
+        ) WITHOUT ROWID
+    """)
+    
+    # Insert in reverse order
+    for i in range(99, -1, -1):
+        k = f"k{i:03d}"
+        conn.execute("INSERT INTO w (k, v) VALUES (?, ?)", (k, i))
+    
+    # View rv
+    conn.execute("CREATE VIEW rv AS SELECT v FROM r")
     
     conn.commit()
     conn.close()

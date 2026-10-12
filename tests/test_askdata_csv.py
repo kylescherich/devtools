@@ -11,7 +11,7 @@ from unittest.mock import patch, mock_open
 from askdata.csvinspect import inspect_csv
 from tests.askdata_fixtures import (
     clean_csv, messy_csv, empty_csv, header_only_csv,
-    semicolon_csv, mixed_csv
+    semicolon_csv, mixed_csv, headerless_csv
 )
 
 
@@ -30,7 +30,7 @@ class TestCSVInspect(unittest.TestCase):
         """Test clean CSV with proper types and statistics."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = clean_csv(tmpdir)
-            result = inspect_csv(path)
+            result = inspect_csv(path, samples=True)
             
             # Assert non-empty
             self.assertIsNotNone(result)
@@ -78,7 +78,7 @@ class TestCSVInspect(unittest.TestCase):
         """Test messy CSV with malformed rows, blank header, encoding."""
         with tempfile.TemporaryDirectory() as tmpdir:
             path = messy_csv(tmpdir)
-            result = inspect_csv(path)
+            result = inspect_csv(path, samples=True)
             
             # Assert non-empty
             self.assertIsNotNone(result)
@@ -283,6 +283,121 @@ class TestCSVInspect(unittest.TestCase):
             
             # Should have processed rows (no exception)
             self.assertGreater(result["row_count"], 3000)
+    
+    def test_headerless_csv(self):
+        """Test headerless CSV uses col1..colN and treats first row as data."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = headerless_csv(tmpdir)
+            result = inspect_csv(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result), 0)
+            
+            # Check has_header is False
+            self.assertFalse(result["has_header"])
+            
+            # Check columns are col1, col2, col3
+            cols = {col["name"]: col for col in result["columns"]}
+            self.assertIn("col1", cols)
+            self.assertIn("col2", cols)
+            self.assertIn("col3", cols)
+            
+            # Check row count is 20 (all rows are data)
+            self.assertEqual(result["row_count"], 20)
+            self.assertEqual(result["rows_analyzed"], 20)
+    
+    def test_clean_csv_max_rows_counts(self):
+        """Test clean CSV with max_rows shows correct counts."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = clean_csv(tmpdir)
+            result = inspect_csv(path, max_rows=50)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result), 0)
+            
+            # Check counts
+            self.assertEqual(result["rows_analyzed"], 50)
+            self.assertEqual(result["physical_rows"], 200)
+            self.assertTrue(result["physical_rows_exact"])
+            
+            # All columns should have distinct_exact False due to sampling
+            for col in result["columns"]:
+                self.assertFalse(col["distinct_exact"])
+    
+    def test_messy_csv_malformed_counts(self):
+        """Test messy CSV shows malformed_skipped and physical_rows."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = messy_csv(tmpdir)
+            result = inspect_csv(path, samples=True)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result), 0)
+            
+            # Check malformed_skipped
+            self.assertEqual(result["malformed_skipped"], 2)
+            
+            # Check physical_rows = rows_analyzed + malformed_skipped
+            self.assertEqual(result["physical_rows"], result["rows_analyzed"] + 2)
+    
+    def test_clean_csv_price_mean_exact(self):
+        """Test clean CSV price column mean matches statistics.mean."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from statistics import mean as stats_mean
+            
+            path = clean_csv(tmpdir)
+            result = inspect_csv(path, samples=True)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result), 0)
+            
+            # Find price column
+            cols = {col["name"]: col for col in result["columns"]}
+            price_col = cols["price"]
+            
+            # Calculate expected mean
+            expected_prices = [10.5 + i * 0.1 for i in range(200)]
+            expected_mean = stats_mean(expected_prices)
+            
+            # Check mean is close
+            self.assertAlmostEqual(price_col["numeric"]["mean"], expected_mean, places=9)
+            
+            # Check median_approx is False
+            self.assertFalse(price_col["numeric"]["median_approx"])
+    
+    def test_clean_csv_median_approx_with_small_reservoir(self):
+        """Test clean CSV with small RESERVOIR_SIZE shows median_approx True."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from askdata import csvinspect
+            from askdata.report import render_terminal
+            
+            path = clean_csv(tmpdir)
+            
+            # Patch RESERVOIR_SIZE to 10
+            original_size = csvinspect.RESERVOIR_SIZE
+            try:
+                csvinspect.RESERVOIR_SIZE = 10
+                result = inspect_csv(path, samples=True)
+                
+                # Assert non-empty
+                self.assertIsNotNone(result)
+                self.assertGreater(len(result), 0)
+                
+                # Find price column
+                cols = {col["name"]: col for col in result["columns"]}
+                price_col = cols["price"]
+                
+                # Check median_approx is True
+                self.assertTrue(price_col["numeric"]["median_approx"])
+                
+                # Check terminal output contains "approx."
+                terminal_output = render_terminal(result)
+                self.assertIn("approx.", terminal_output)
+            finally:
+                csvinspect.RESERVOIR_SIZE = original_size
 
 
 if __name__ == '__main__':

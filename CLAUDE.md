@@ -31,3 +31,10 @@ Run from the repo root:
 - Small diffs, one feature per step; run the tests after every change.
 - Report real command output; never claim a pass without it.
 - Work for tasks 2-5 happens on branch devtools/repo-xray-mvp, merged by PR.
+
+## askdata safety rules
+- Never weaken `mode=ro`, `PRAGMA query_only=1` or the SQLite authorizer in `askdata/sqliteinspect.py`.
+- Never enable SQLite extensions, and never allow `load_extension`, `readfile`, `writefile`, `edit` or `fts3_tokenizer`.
+- Never make `--samples` the default; reports stay schema-and-statistics-only unless the user asks.
+- Tests that check privacy or leaks assert non-empty output first (DEC-071).
+- Milestone 2 (natural-language questions via a model) is not authorized.

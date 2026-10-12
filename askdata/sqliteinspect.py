@@ -11,11 +11,12 @@ class InspectError(Exception):
     pass
 
 
-def open_readonly(path):
+def open_readonly(path, frozen=False):
     """Open a SQLite database in read-only mode with security restrictions.
     
     Args:
         path: Path to the database file
+        frozen: If True, add immutable=1 flag (for static copies only)
         
     Returns:
         sqlite3.Connection object configured for read-only access
@@ -33,16 +34,43 @@ def open_readonly(path):
     if not path.is_file():
         raise InspectError("not a file")
     
+    # Read first 100 bytes to check for WAL mode
+    try:
+        with open(path, 'rb') as f:
+            header = f.read(100)
+    except (OSError, PermissionError) as e:
+        raise InspectError("not a file") from e
+    
+    # Check if database is in WAL mode (bytes 18 and 19 both == 2)
+    if len(header) >= 20 and header[18] == 2 and header[19] == 2:
+        # WAL mode detected
+        if not frozen:
+            shm_path = Path(str(path) + "-shm")
+            if not shm_path.exists():
+                raise InspectError("WAL database without -shm access; copy it and use --frozen")
+    
     # Build read-only URI
-    uri = "file:" + urllib.parse.quote(str(path.resolve())) + "?mode=ro&immutable=1"
+    uri = "file:" + urllib.parse.quote(str(path.resolve())) + "?mode=ro"
+    if frozen:
+        uri += "&immutable=1"
     
     try:
         conn = sqlite3.connect(uri, uri=True)
-    except sqlite3.DatabaseError as e:
+    except sqlite3.Error as e:
+        error_name = getattr(e, 'sqlite_errorname', '')
+        if error_name == 'SQLITE_CANTOPEN' or error_name.startswith('SQLITE_READONLY'):
+            raise InspectError("WAL database without -shm access; copy it and use --frozen") from e
         raise InspectError("not a SQLite database") from e
     
     # Enable query-only mode
-    conn.execute("PRAGMA query_only=1")
+    try:
+        conn.execute("PRAGMA query_only=1")
+    except sqlite3.Error as e:
+        conn.close()
+        error_name = getattr(e, 'sqlite_errorname', '')
+        if error_name == 'SQLITE_CANTOPEN' or error_name.startswith('SQLITE_READONLY'):
+            raise InspectError("WAL database without -shm access; copy it and use --frozen") from e
+        raise InspectError("not a SQLite database") from e
     
     # Set up authorizer to restrict operations
     def authorizer(action, arg1, arg2, arg3, arg4):
@@ -63,6 +91,10 @@ def open_readonly(path):
         # Allow only safe pragmas
         if action == sqlite3.SQLITE_PRAGMA:
             pragma_name = (arg1 or "").lower()
+            # data_version only allowed when arg2 is None (FTS5 needs it)
+            if pragma_name == 'data_version' and arg2 is None:
+                return sqlite3.SQLITE_OK
+            # Other allowed pragmas can have arguments
             allowed_pragmas = {
                 'table_info', 'table_xinfo', 'foreign_key_list', 
                 'index_list', 'index_info'
@@ -79,8 +111,11 @@ def open_readonly(path):
     # Verify it's a valid SQLite database
     try:
         conn.execute("SELECT count(*) FROM sqlite_master")
-    except sqlite3.DatabaseError as e:
+    except sqlite3.Error as e:
         conn.close()
+        error_name = getattr(e, 'sqlite_errorname', '')
+        if error_name == 'SQLITE_CANTOPEN' or error_name.startswith('SQLITE_READONLY'):
+            raise InspectError("WAL database without -shm access; copy it and use --frozen") from e
         raise InspectError("not a SQLite database") from e
     
     return conn
@@ -97,13 +132,15 @@ def _is_date_value(value):
     return _is_date(value)
 
 
-def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
+def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False, samples=False):
     """Inspect a SQLite database and return analysis.
     
     Args:
         path: Path to the SQLite database file
         max_rows: Maximum rows to analyze per table (default 1,000,000)
         deadline: Optional time.monotonic() deadline for timeout
+        frozen: If True, treat database as unchanging (immutable=1)
+        samples: Whether to collect sample values and top values (default False)
         
     Returns:
         Dictionary with database analysis including tables, relationships, and warnings
@@ -114,12 +151,13 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
     timed_out = False
     
     try:
-        conn = open_readonly(path)
+        conn = open_readonly(path, frozen=frozen)
         
         result = {
             "kind": "sqlite",
             "name": path.name,
             "size_bytes": path.stat().st_size,
+            "samples_enabled": samples,
             "tables": [],
             "relationships": [],
             "warnings": []
@@ -153,7 +191,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
                 break
             
             try:
-                table_info = _analyze_table(conn, obj_name, obj_type, max_rows, deadline, result["warnings"])
+                table_info = _analyze_table(conn, obj_name, obj_type, max_rows, deadline, result["warnings"], samples)
                 result["tables"].append(table_info)
                 
                 # Collect foreign key relationships
@@ -164,13 +202,25 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
                     ]
                     result["relationships"].append(relationship)
                     
-            except sqlite3.OperationalError as e:
-                # Only treat as timeout if deadline is set and passed
+            except sqlite3.DatabaseError as e:
+                # Check if this is a deadline timeout
                 if deadline is not None and time.monotonic() > deadline:
                     timed_out = True
                     break
-                else:
-                    raise
+                # Otherwise, record the error and continue
+                error_msg = str(e)
+                table_info = {
+                    "name": obj_name,
+                    "type": obj_type,
+                    "error": error_msg,
+                    "row_count": None,
+                    "sampled": False,
+                    "foreign_keys": [],
+                    "indexes": [],
+                    "columns": []
+                }
+                result["tables"].append(table_info)
+                result["warnings"].append(f"{obj_name}: could not be read ({error_msg})")
         
         if timed_out and "timeout: statistics are partial" not in result["warnings"]:
             result["warnings"].append("timeout: statistics are partial")
@@ -190,7 +240,7 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None):
     return result
 
 
-def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
+def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings, samples):
     """Analyze a single table or view."""
     quoted_name = _quote_identifier(obj_name)
     
@@ -205,15 +255,45 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
     row_count = cursor.fetchone()[0]
     table_info["row_count"] = row_count
     
+    # Determine row order
+    order = "none"
+    order_clause = ""
+    
+    # Try rowid first
+    try:
+        if obj_type != "table":
+            raise sqlite3.OperationalError("views have no defined row order")
+        conn.execute(f"SELECT rowid FROM {quoted_name} LIMIT 0")
+        order = "rowid"
+        order_clause = " ORDER BY rowid"
+    except sqlite3.DatabaseError:
+        # No rowid, check for primary key
+        cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
+        pragma_columns = cursor.fetchall()
+        pk_cols = [(col[0], col[1]) for col in pragma_columns if col[5] > 0]  # col[5] is pk
+        
+        if pk_cols:
+            # Sort by pk column order
+            pk_cols.sort(key=lambda x: x[0])
+            pk_names = [_quote_identifier(col[1]) for col in pk_cols]
+            order = "primary key"
+            order_clause = " ORDER BY " + ", ".join(pk_names)
+    
+    table_info["order"] = order
+    
     # Determine if we need to sample
     sampled = row_count > max_rows
     table_info["sampled"] = sampled
     
     if sampled:
         warnings.append(f"{obj_name}: sampled first {max_rows} rows")
-        src_query = f"SELECT * FROM {quoted_name} LIMIT {max_rows}"
+        table_info["rows_analyzed"] = max_rows
+        src_query = f"SELECT * FROM {quoted_name}{order_clause} LIMIT {max_rows}"
     else:
-        src_query = f"SELECT * FROM {quoted_name}"
+        if order_clause:
+            src_query = f"SELECT * FROM {quoted_name}{order_clause}"
+        else:
+            src_query = f"SELECT * FROM {quoted_name}"
     
     # Get column info from PRAGMA
     cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
@@ -238,6 +318,11 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
     indexes = [row[1] for row in index_rows]  # row[1] is the index name
     table_info["indexes"] = indexes
     
+    # Get column info from PRAGMA (if not already fetched for pk detection)
+    if order == "rowid":
+        cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
+        pragma_columns = cursor.fetchall()
+    
     # Analyze each column
     for col_idx, pragma_col in enumerate(pragma_columns):
         # Check deadline before each column
@@ -258,14 +343,14 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings):
         }
         
         # Analyze column statistics
-        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings)
+        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples, order_clause)
         
         table_info["columns"].append(col_info)
     
     return table_info
 
 
-def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings):
+def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples, order_clause=""):
     """Analyze statistics for a single column."""
     quoted_col = _quote_identifier(col_name)
     
@@ -293,7 +378,7 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
         col_info["share"] = 0.0
         col_info["distinct"] = 0
         col_info["distinct_exact"] = not sampled
-        col_info["samples"] = []
+        col_info["samples"] = [] if samples else []
         col_info["numeric"] = None
         col_info["dates"] = None
         col_info["top"] = None
@@ -377,45 +462,69 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
     col_info["distinct"] = cursor.fetchone()[0]
     col_info["distinct_exact"] = not sampled
     
-    # Get samples (first 5 distinct non-null values)
-    cursor = conn.execute(f"""
-        SELECT DISTINCT {quoted_col} FROM ({src_query})
-        WHERE {quoted_col} IS NOT NULL AND {quoted_col} != ''
-        LIMIT 5
-    """)
-    samples = []
-    for row in cursor.fetchall():
-        value = row[0]
-        if isinstance(value, bytes):
-            samples.append(f"<blob {len(value)} bytes>")
-        else:
-            value_str = str(value)
-            if len(value_str) > 80:
-                value_str = value_str[:80]
-            samples.append(value_str)
-    col_info["samples"] = samples
+    # Get samples (first 5 distinct non-null values) only if enabled
+    if samples:
+        cursor = conn.execute(f"""
+            SELECT DISTINCT {quoted_col} FROM ({src_query})
+            WHERE {quoted_col} IS NOT NULL AND {quoted_col} != ''
+            LIMIT 5
+        """)
+        samples_list = []
+        for row in cursor.fetchall():
+            value = row[0]
+            if isinstance(value, bytes):
+                samples_list.append(f"<blob {len(value)} bytes>")
+            else:
+                value_str = str(value)
+                if len(value_str) > 80:
+                    value_str = value_str[:80]
+                samples_list.append(value_str)
+        col_info["samples"] = samples_list
+    else:
+        col_info["samples"] = []
     
     # Numeric statistics for int/float/mixed with numeric candidate
     if col_info["type"] in ("int", "float") or (col_info["type"] == "mixed" and col_info["candidate"] in ("int", "float")):
+        # Get min, max, mean in one query
         cursor = conn.execute(f"""
-            SELECT {quoted_col}
+            SELECT MIN({quoted_col}), MAX({quoted_col}), AVG({quoted_col}), COUNT(*)
             FROM ({src_query})
             WHERE typeof({quoted_col}) IN ('integer', 'real')
-            ORDER BY {quoted_col}
         """)
-        numeric_values = [row[0] for row in cursor.fetchall()]
+        min_val, max_val, mean_val, count = cursor.fetchone()
         
-        if numeric_values:
-            min_val = min(numeric_values)
-            max_val = max(numeric_values)
-            mean_val = sum(numeric_values) / len(numeric_values)
-            median_val = statistics.median(numeric_values)
+        if count > 0:
+            # Calculate median using SQL
+            if count % 2 == 1:
+                # Odd count: get middle value
+                offset = count // 2
+                cursor = conn.execute(f"""
+                    SELECT {quoted_col}
+                    FROM ({src_query})
+                    WHERE typeof({quoted_col}) IN ('integer', 'real')
+                    ORDER BY {quoted_col}
+                    LIMIT 1 OFFSET {offset}
+                """)
+                median_val = cursor.fetchone()[0]
+            else:
+                # Even count: average of two middle values
+                offset = count // 2 - 1
+                cursor = conn.execute(f"""
+                    SELECT {quoted_col}
+                    FROM ({src_query})
+                    WHERE typeof({quoted_col}) IN ('integer', 'real')
+                    ORDER BY {quoted_col}
+                    LIMIT 2 OFFSET {offset}
+                """)
+                vals = cursor.fetchall()
+                median_val = (vals[0][0] + vals[1][0]) / 2
             
             col_info["numeric"] = {
                 "min": min_val,
                 "max": max_val,
                 "mean": mean_val,
-                "median": median_val
+                "median": median_val,
+                "median_approx": False
             }
         else:
             col_info["numeric"] = None
@@ -440,8 +549,8 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
     else:
         col_info["dates"] = None
     
-    # Top values for text/mixed when distinct <= 50
-    if col_info["distinct"] <= 50 and col_info["type"] in ("text", "mixed"):
+    # Top values for text/mixed when distinct <= 50 (only if samples enabled)
+    if samples and col_info["distinct"] <= 50 and col_info["type"] in ("text", "mixed"):
         cursor = conn.execute(f"""
             SELECT {quoted_col}, COUNT(*) as cnt
             FROM ({src_query})

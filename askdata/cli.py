@@ -25,6 +25,10 @@ def main(argv=None):
                                 help="Timeout in seconds (default: 60)")
     inspect_parser.add_argument("--force", action="store_true",
                                 help="Force processing despite warnings")
+    inspect_parser.add_argument("--frozen", action="store_true",
+                                help="Treat the database as unchanging (immutable=1); only for copies you know are static, results may be stale")
+    inspect_parser.add_argument("--samples", action="store_true",
+                                help="Include up to 5 example values and top values per column; off by default for privacy")
     
     try:
         args = parser.parse_args(argv)
@@ -75,10 +79,11 @@ def main(argv=None):
     # Inspect the file
     try:
         if kind == "sqlite":
-            model = inspect_sqlite(input_path, max_rows=args.max_rows, deadline=deadline)
+            model = inspect_sqlite(input_path, max_rows=args.max_rows, deadline=deadline, 
+                                 frozen=args.frozen, samples=args.samples)
         else:  # csv
             model = inspect_csv(input_path, max_bytes=args.max_bytes, 
-                              max_rows=args.max_rows, deadline=deadline)
+                              max_rows=args.max_rows, deadline=deadline, samples=args.samples)
     except InspectError as e:
         print(f"askdata: {e}", file=sys.stderr)
         return 3
