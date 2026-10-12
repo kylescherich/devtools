@@ -186,7 +186,7 @@ def render_terminal(model):
                 if col.get('numeric'):
                     num = col['numeric']
                     # Hide identifier-like values when samples are off
-                    if not samples_enabled and col['type'] == 'int':
+                    if not samples_enabled and (col['type'] == 'int' or (col['type'] == 'mixed' and col.get('candidate') == 'int')):
                         max_abs = max(abs(num['min']), abs(num['max']))
                         if max_abs >= 10**12:
                             lines.append(f"    Numeric: hidden (identifier-like)")
@@ -375,7 +375,7 @@ def render_md(model):
                 if col.get('numeric'):
                     num = col['numeric']
                     # Hide identifier-like values when samples are off
-                    if not samples_enabled and col['type'] == 'int':
+                    if not samples_enabled and (col['type'] == 'int' or (col['type'] == 'mixed' and col.get('candidate') == 'int')):
                         max_abs = max(abs(num['min']), abs(num['max']))
                         if max_abs >= 10**12:
                             stats_parts.append("hidden (identifier-like)")
@@ -587,7 +587,7 @@ def render_html(model):
                 if col.get('numeric'):
                     num = col['numeric']
                     # Hide identifier-like values when samples are off
-                    if not samples_enabled and col['type'] == 'int':
+                    if not samples_enabled and (col['type'] == 'int' or (col['type'] == 'mixed' and col.get('candidate') == 'int')):
                         max_abs = max(abs(num['min']), abs(num['max']))
                         if max_abs >= 10**12:
                             stats_parts.append("hidden (identifier-like)")
