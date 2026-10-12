@@ -4,6 +4,7 @@ Each row is (input, expected). Every row also checks that the output is
 non-empty and that redact() leaves its own output unchanged.
 """
 import pathlib
+import time
 import unittest
 
 import loglens.redact
@@ -141,3 +142,66 @@ class TestSession(RedactTable):
             ("possession=1", "possession=1"),
             ("session ended", "session ended"),
         ])
+
+
+class TestPersonal(RedactTable):
+    def test_item3_personal_data(self):
+        self.check_rows(ORDINARY + [
+            # a. card numbers: 13-19 digits, first digit 2-6, Luhn-valid
+            ("card 4111111111111111 ok", f"card {R} ok"),
+            ("card 4000 0566 5566 5556 ok", f"card {R} ok"),
+            ("card 5500-0000-0000-0004 ok", f"card {R} ok"),
+            ("amex 3782-822463-10005 ok", f"amex {R} ok"),
+            ("amex 378282246310005 ok", f"amex {R} ok"),
+            ("visa13 4222222222222 ok", f"visa13 {R} ok"),
+            ("card 6011111111111117,", f"card {R},"),
+            ("mc 2223000048400011 ok", f"mc {R} ok"),
+            ("19 4111 1111 1111 1111 003 ok", f"19 {R} ok"),
+            ("id 4000123456789010 ok", "id 4000123456789010 ok"),       # not Luhn
+            ("card 4000 1234 5678 9010 ok", "card 4000 1234 5678 9010 ok"),
+            ("ts 1767225600123 ok", "ts 1767225600123 ok"),             # epoch ms
+            ("ts 1111111111111111 ok", "ts 1111111111111111 ok"),       # first digit 1
+            ("card 4111-1111 1111-1111 ok", "card 4111-1111 1111-1111 ok"),  # mixed
+            ("ref 4111111111111111x", "ref 4111111111111111x"),         # touches letter
+            ("ref x4111111111111111", "ref x4111111111111111"),
+            ("n 41111111111111110 ok", "n 41111111111111110 ok"),       # 17, not Luhn
+            ("port 8080 pid 31337 took 1234 ms", "port 8080 pid 31337 took 1234 ms"),
+            # b. labelled personal fields
+            ("phone=SNTc1 ok", f"phone={R} ok"),
+            ("user_phone: SNTc2", f"user_phone: {R}"),
+            ("mobilePhone=SNTc3", f"mobilePhone={R}"),
+            ("tel=SNTc4", f"tel={R}"),
+            ("Tel: SNTc5", f"Tel: {R}"),
+            ("mobile=SNTc6", f"mobile={R}"),
+            ("dob=1990-01-02 ok", f"dob={R} ok"),
+            ("birth_date: 1990-01-02", f"birth_date: {R}"),
+            ("birthDate=1990-01-02", f"birthDate={R}"),
+            ("SSN=SNTc7", f"SSN={R}"),
+            ("patient_id=SNTc8", f"patient_id={R}"),
+            ("member_id=SNTc9", f"member_id={R}"),
+            ("customerId=SNTc10", f"customerId={R}"),
+            ("MRN: SNTc11", f"MRN: {R}"),
+            ('{"phone": "+1 555 0100"}', f'{{"phone": "{R}"}}'),
+            ("{'ssn': 'SNTc12'}", f"{{'ssn': '{R}'}}"),
+            ("hotel=Ritz", "hotel=Ritz"),
+            ("telemetry=on", "telemetry=on"),
+            ("automobile=car", "automobile=car"),
+            ("phone_number=+15550100 ok", f"phone_number={R} ok"),
+            ("mobile_number: SNTc14", f"mobile_number: {R}"),
+            ("telephone=SNTc15", f"telephone={R}"),
+            ("date_of_birth=1990-01-02", f"date_of_birth={R}"),
+            ("patient_id_hash=SNTc16", f"patient_id_hash={R}"),
+            ("hotel_id=42", "hotel_id=42"),
+            # whole component anywhere: accepted over-redaction, privacy over noise
+            ("phone_count=2", f"phone_count={R}"),
+            ("mobile_app_version=3.1", f"mobile_app_version={R}"),
+            ("call me at 555 0100 John Smith", "call me at 555 0100 John Smith"),
+        ])
+
+    def test_item3_long_number_run_is_linear(self):
+        text = " ".join(f"{1000 + i % 9000:04d}" for i in range(5000))
+        start = time.perf_counter()
+        out = redact(text)
+        elapsed = time.perf_counter() - start
+        self.assertTrue(out)
+        self.assertLess(elapsed, 1.0)

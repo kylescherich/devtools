@@ -33,7 +33,7 @@ SECRET_CASES = [
     ("papa", "inline -----BEGIN PRIVATE KEY-----SNTpemPapa-----END PRIVATE KEY-----",
      "SNTpemPapa"),
     ("quebec", "card 4111111111111111 charged", "4111111111111111"),
-    ("romeo", "card 4000 1234 5678 9010 charged", "4000 1234 5678 9010"),
+    ("romeo", "card 4000 0566 5566 5556 charged", "4000 0566 5566 5556"),
     ("sierra", "card 5500-0000-0000-0004 charged", "5500-0000-0000-0004"),
     ("victor", "db login pass=SNTpass1 ok", "SNTpass1"),
     ("whiskey", "db login pwd=SNTpwd2 ok", "SNTpwd2"),
@@ -46,6 +46,8 @@ SECRET_CASES = [
     ("copper", "retry with Bearer SNTbareCopper42 now", "SNTbareCopper42"),
     ("garnet", "request Cookie: theme=dark; app_state=SNTcookieGarnet; lang=en",
      "SNTcookieGarnet"),
+    ("jade", "card 3782-822463-10005 declined", "822463"),
+    ("onyx", "callback phone=+1-555-SNTphoneOnyx ok", "SNTphoneOnyx"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]

@@ -155,6 +155,17 @@ Details:
   `jsessionid`, `user_session`, `connect.sid`; not `session_count`,
   `sessions`, `sidebar`). `Cookie:`, `Set-Cookie:` and `cookie=` values are
   redacted to the end of the line.
+- Card numbers: 13-19 digits, as one run or in groups with one consistent
+  space or dash (4-4-4-4, 4-6-5, ...), first digit 2-6, passing the Luhn
+  check and not touching another digit or a letter. Other long numbers
+  (ids, epoch-millisecond timestamps) are kept.
+- Labelled personal fields: `phone`, `tel`, `mobile`, `dob`, `birth_date`,
+  `ssn`, `patient_id`, `member_id`, `customer_id`, `mrn`, `telephone`,
+  `date_of_birth`, as a whole name component anywhere in the name
+  (`user_phone=`, `mobilePhone=`, `phone_number=`, `patient_id_hash=`; not
+  `hotel=`, `hotel_id=`, `telemetry=`, `automobile=`). Privacy over noise:
+  `phone_count=` and `mobile_app_version=` are redacted too. There is no
+  free-text phone, name or address detection.
 - Provider token shapes anywhere: AWS (`AKIA`/`ASIA`), Slack (`xox?-`),
   GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
   GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.
