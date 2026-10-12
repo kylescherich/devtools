@@ -3,7 +3,7 @@ import io
 import tempfile
 import unittest
 
-from loglens.cli import main
+from loglens.cli import EXIT_ERROR, main
 from loglens.group import group_entries, normalise, traceback_signature
 from loglens.readers import INFO, read_logs
 from loglens.redact import REDACTED, redact
@@ -201,7 +201,7 @@ class TestRedaction(GroupTestCase):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
                 code = main([str(path), *extra])
             text = out.getvalue()
-            self.assertEqual(code, 0)
+            self.assertEqual(code, EXIT_ERROR)
             self.assertTrue(text.strip(), "CLI output is empty")
             for sentinel in self._sentinels():
                 self.assertNotIn(sentinel, text, f"{extra}: {sentinel} leaked")
@@ -230,7 +230,7 @@ class TestDefaultOutput(GroupTestCase):
         with contextlib.redirect_stdout(out):
             code = main([str(path)])
         text = out.getvalue()
-        self.assertEqual(code, 0)
+        self.assertEqual(code, EXIT_ERROR)
         self.assertTrue(text.strip())
         self.assertIn("ERROR payment <n> failed for order <n>", text)
         self.assertNotIn(raw_line, text)
