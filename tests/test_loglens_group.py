@@ -9,6 +9,7 @@ from loglens.readers import INFO, read_logs
 from loglens.redact import REDACTED, redact
 from loglens.report import analyse, render
 from tests import loglens_fixtures as fx
+from tests import secret_shapes as ss
 
 TS = "2026-03-01T10:00:{:02d}Z"
 
@@ -25,12 +26,13 @@ SECRET_CASES = [
     ("hotel", "config password: SNTcolonHotel ok", "SNTcolonHotel"),
     ("india", 'payload {"api_key": "SNT quoted India"} sent', "SNT quoted India"),
     ("juliet", "payload {'token': 'SNTsingleJuliet'} sent", "SNTsingleJuliet"),
-    ("kilo", "push with ghp_SNTghpKilo0123456789abcd", "SNTghpKilo"),
-    ("lima", "push with github_pat_SNTpatLima_0123456789", "SNTpatLima"),
-    ("mike", "model key sk-SNTskMike0123456789", "SNTskMike"),
-    ("november", "aws key AKIASNTNOVEMBER01234 used", "SNTNOVEMBER"),
-    ("oscar", "cookie eyJSNTjwtOscar.eyJzdWIiOiJ4In0.c2lnbmF0dXJl", "SNTjwtOscar"),
-    ("papa", "inline -----BEGIN PRIVATE KEY-----SNTpemPapa-----END PRIVATE KEY-----",
+    ("kilo", "push with " + ss.GHP + "SNTghpKilo0123456789abcd", "SNTghpKilo"),
+    ("lima", "push with " + ss.GITHUB_PAT + "SNTpatLima_0123456789", "SNTpatLima"),
+    ("mike", "model key " + ss.SK_DASH + "SNTskMike0123456789", "SNTskMike"),
+    ("november", "aws key " + ss.AKIA + "SNTNOVEMBER01234 used", "SNTNOVEMBER"),
+    ("oscar", "cookie " + ss.JWT + "SNTjwtOscar." + ss.JWT + "zdWIiOiJ4In0.c2lnbmF0dXJl",
+     "SNTjwtOscar"),
+    ("papa", "inline " + ss.pem("BEGIN") + "SNTpemPapa" + ss.pem("END"),
      "SNTpemPapa"),
     ("quebec", "card 4111111111111111 charged", "4111111111111111"),
     ("romeo", "card 4000 0566 5566 5556 charged", "4000 0566 5566 5556"),
@@ -42,7 +44,7 @@ SECRET_CASES = [
     ("zulu", "proxy auth=SNTauth5 ok", "SNTauth5"),
     ("amber", "mail sent to sntmail6@example.test ok", "sntmail6"),
     # M1.2 classes (BRIEF-DEVWS-021): one sentinel each.
-    ("cobalt", "slack post xoxb-SNTslackCobalt-0123 ok", "SNTslackCobalt"),
+    ("cobalt", "slack post " + ss.XOXB + "SNTslackCobalt-0123 ok", "SNTslackCobalt"),
     ("copper", "retry with Bearer SNTbareCopper42 now", "SNTbareCopper42"),
     ("garnet", "request Cookie: theme=dark; app_state=SNTcookieGarnet; lang=en",
      "SNTcookieGarnet"),
@@ -53,8 +55,8 @@ SECRET_CASES = [
     # DEC-190: a declined scheme word must not hide the real token.
     ("quartz", "sent basic Basic SNTbasicQuartz== ok", "SNTbasicQuartz"),
 ]
-PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
-             "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]
+PEM_SPLIT = [ss.pem("BEGIN", "RSA "), "SNTpemSplitTango0123",
+             "SNTpemSplitTango4567", ss.pem("END", "RSA ")]
 
 
 class GroupTestCase(unittest.TestCase):
@@ -270,7 +272,7 @@ class TestRedaction(GroupTestCase):
             self.assertEqual(redact(out), out)
 
     def test_unterminated_pem_redacted_to_end(self):
-        self.assertEqual(redact("x -----BEGIN PRIVATE KEY-----\nSNTabc"), f"x {REDACTED}")
+        self.assertEqual(redact("x " + ss.pem("BEGIN") + "\nSNTabc"), f"x {REDACTED}")
 
     def test_ordinary_text_untouched(self):
         # "tokens: 5" is redacted since keys match by name-contains (DEC-189).

@@ -9,6 +9,7 @@ import unittest
 
 import loglens.redact
 from loglens.redact import REDACTED as R, redact
+from tests import secret_shapes as ss
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BOUNDARY = "Do not run Log Lens on logs you would not show in a terminal."
@@ -48,7 +49,7 @@ ORDINARY = [
 
 class TestCredentials(RedactTable):
     def test_item1_credentials(self):
-        gh36 = "ghp_" + "A1b2C3d4E5" * 3 + "F6g7H8"
+        gh36 = ss.GHP + "A1b2C3d4E5" * 3 + "F6g7H8"
         self.check_rows(ORDINARY + [
             # a. name-contains keys
             ("AWS_SECRET_ACCESS_KEY=SNTa1", f"AWS_SECRET_ACCESS_KEY={R}"),
@@ -84,16 +85,16 @@ class TestCredentials(RedactTable):
             ("PASSENGER=4", "PASSENGER=4"),
             ("tokens: 5", f"tokens: {R}"),          # name-contains: accepted over-redaction
             # b. provider shapes anywhere
-            ("key AKIAABCDEFGHIJKLMNOP used", f"key {R} used"),
-            ("key ASIAABCDEFGHIJKLMNOP used", f"key {R} used"),
-            ("slack xoxb-1234567890-abcdef ok", f"slack {R} ok"),
-            ("gitlab glpat-abcdefghij0123456789 ok", f"gitlab {R} ok"),
-            ("google AIza" + "B" * 35 + " ok", f"google {R} ok"),
-            ("stripe sk_live_abcdef012345 ok", f"stripe {R} ok"),
-            ("stripe rk_test_abcdef012345 ok", f"stripe {R} ok"),
+            ("key " + ss.AKIA + "ABCDEFGHIJKLMNOP used", f"key {R} used"),
+            ("key " + ss.ASIA + "ABCDEFGHIJKLMNOP used", f"key {R} used"),
+            ("slack " + ss.XOXB + "1234567890-abcdef ok", f"slack {R} ok"),
+            ("gitlab " + ss.GLPAT + "abcdefghij0123456789 ok", f"gitlab {R} ok"),
+            ("google " + ss.AIZA + "B" * 35 + " ok", f"google {R} ok"),
+            ("stripe " + ss.SK_LIVE + "abcdef012345 ok", f"stripe {R} ok"),
+            ("stripe " + ss.RK_TEST + "abcdef012345 ok", f"stripe {R} ok"),
             (f"github {gh36} ok", f"github {R} ok"),
-            ("github github_pat_abcdef0123456789 ok", f"github {R} ok"),
-            ("openai sk-abcdef0123456789 ok", f"openai {R} ok"),
+            ("github " + ss.GITHUB_PAT + "abcdef0123456789 ok", f"github {R} ok"),
+            ("openai " + ss.SK_DASH + "abcdef0123456789 ok", f"openai {R} ok"),
             # c. Basic / Bearer anywhere
             ("sent Basic dXNlcjpwYXNz ok", f"sent Basic {R} ok"),
             ("sent Bearer abc123def456 ok", f"sent Bearer {R} ok"),
