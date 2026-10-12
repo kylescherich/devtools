@@ -4,7 +4,11 @@ import re
 
 REDACTED = "<redacted>"
 
-_KEYS = r"(?:password|passwd|secret|token|api_key|api-key|apikey)"
+# Long keys match anywhere (db_password=); the short ones pass, pwd and auth
+# must not follow a letter, so db_pass= and X-Auth: match but bypass= and
+# oauth= do not.
+_KEYS = (r"(?:password|passwd|passphrase|secret|token|api_key|api-key|apikey"
+         r"|credentials|credential|(?<![A-Za-z])(?:pass|pwd|auth))")
 # The marker as reports print it: plain, or HTML-escaped in md/html output.
 _MARK = r"(?:<redacted>|&lt;redacted&gt;)"
 # Skip a value that already is just the marker, up to where the rule would
@@ -36,6 +40,12 @@ _RULES = [
                 + r"(?:(?P<q2>\")(?:[^\"\\\r\n]|\\.)*\"|(?P<q1>')(?:[^'\\\r\n]|\\.)*'"
                 r"|[^\s,;&\"'}\]]+)"),
      _keep_quotes),
+    # URL userinfo (any scheme): scheme://user:secret@host -> scheme://<redacted>@host.
+    # Runs before the e-mail rule so "user:secret@host" is not taken for an address.
+    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)(?!" + _MARK + r"@)[^\s/?#\"'<>]+@"),
+     r"\1" + REDACTED + "@"),
+    # E-mail addresses, so they are gone with --raw too.
+    (re.compile(r"\b[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"), "<email>"),
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{10,}"), REDACTED),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{10,}"), REDACTED),

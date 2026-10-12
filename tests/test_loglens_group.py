@@ -35,6 +35,12 @@ SECRET_CASES = [
     ("quebec", "card 4111111111111111 charged", "4111111111111111"),
     ("romeo", "card 4000 1234 5678 9010 charged", "4000 1234 5678 9010"),
     ("sierra", "card 5500-0000-0000-0004 charged", "5500-0000-0000-0004"),
+    ("victor", "db login pass=SNTpass1 ok", "SNTpass1"),
+    ("whiskey", "db login pwd=SNTpwd2 ok", "SNTpwd2"),
+    ("xray", "connect https://u:SNTurlpw3@db.example.test/x now", "SNTurlpw3"),
+    ("yankee", 'payload {"credential": "SNTcred4"} sent', "SNTcred4"),
+    ("zulu", "proxy auth=SNTauth5 ok", "SNTauth5"),
+    ("amber", "mail sent to sntmail6@example.test ok", "sntmail6"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]
@@ -213,6 +219,43 @@ class TestRedaction(GroupTestCase):
         self.assertEqual(once, f'token={REDACTED} "password": "{REDACTED}" '
                                f'Authorization: {REDACTED}')
         self.assertEqual(redact(once), once)
+
+    def test_new_keys_all_forms(self):
+        cases = {
+            "db_pass=SNTa ok": f"db_pass={REDACTED} ok",
+            "X-Auth: SNTb": f"X-Auth: {REDACTED}",
+            '{"pwd": "SNT c"}': f'{{"pwd": "{REDACTED}"}}',
+            "{'pass': 'SNTd'}": f"{{'pass': '{REDACTED}'}}",
+            "PASS=SNTe": f"PASS={REDACTED}",
+            "passphrase: SNTf": f"passphrase: {REDACTED}",
+            "credentials=SNTg;": f"credentials={REDACTED};",
+            "Credential = SNTh": f"Credential = {REDACTED}",
+            "auth: login ok": f"auth: {REDACTED} ok",       # accepted over-redaction
+        }
+        for text, expected in cases.items():
+            out = redact(text)
+            self.assertTrue(out)
+            self.assertEqual(out, expected, text)
+            self.assertEqual(redact(out), out)
+
+    def test_short_keys_need_a_non_letter_before(self):
+        for text in ("bypass=yes", "oauth=on", "compass=north", "Authorization-like oauth: x"):
+            out = redact(text)
+            self.assertTrue(out)
+            self.assertEqual(out, text)
+
+    def test_url_userinfo_and_email(self):
+        cases = {
+            "https://u:SNTpw@db.example.test/x": f"https://{REDACTED}@db.example.test/x",
+            "postgres://app:SNTp@ss@10.0.0.5:5432/db": f"postgres://{REDACTED}@10.0.0.5:5432/db",
+            "mail to sntmail@example.test ok": "mail to <email> ok",
+            "https://host.example.test/a?b=c": "https://host.example.test/a?b=c",
+        }
+        for text, expected in cases.items():
+            out = redact(text)
+            self.assertTrue(out)
+            self.assertEqual(out, expected, text)
+            self.assertEqual(redact(out), out)
 
     def test_unterminated_pem_redacted_to_end(self):
         self.assertEqual(redact("x -----BEGIN PRIVATE KEY-----\nSNTabc"), f"x {REDACTED}")

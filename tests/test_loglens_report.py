@@ -68,6 +68,8 @@ class TestPrivacy(ReportTestCase):
                         self.assertNotIn(sentinel, out, f"{sentinel} leaked")
                     if extra:
                         self.assertIn("tango key dump follows", out)
+                        # userinfo redacted by the URL rule, host kept
+                        self.assertIn("@db.example.test/x", out)
                     if fmt == "html":
                         self.assertTrue(out.endswith("</html>\n"))
                         self.assertNotIn(REDACTED, out)       # never a raw tag
