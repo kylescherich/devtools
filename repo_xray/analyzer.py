@@ -633,11 +633,12 @@ def analyze(root, max_files=2000):
             module_name = path_to_name[path_str]
             _parse_file(root_path, rel_path, module_name, model)
     
+    # PASS 3: Resolve imports now that all module names are known
+    _resolve_imports_pass3(model)
+    
     # Second pass for dynamic imports (try blocks, importlib, __import__)
     _second_pass_unresolved(root_path, model)
     
-    # PASS 3: Resolve imports now that all module names are known
-    _resolve_imports_pass3(model)
     _build_tests_pass3(model)
     
     return model
