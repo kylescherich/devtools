@@ -19,8 +19,10 @@ Run from the repo root:
 ## Hard rules for repo_xray (BRIEF-DEVWS-015)
 - Standard library only; analysis uses ast. Never executes or imports code from the target repo.
 - Read-only on the target: never write inside it; --output defaults to the current directory and is refused if it resolves inside the target.
-- Never follows symlinks; skips .git, virtualenvs and __pycache__; never reads or lists dotfiles or config/secret-shaped files (.env*, *.key, *.pem, secrets*). Contents of *.toml, *.ini, *.cfg, *.json, *.yaml are never read, except pyproject.toml for its console-scripts table only. Only Python sources are parsed.
-- HTML-escape every source-derived string. Reports contain names, signatures and first docstring lines only, never full source or string literals.
+- repo-xray reads .py files and the [project.scripts] table of the root pyproject.toml, nothing else.
+- Never follows symlinks; skips .git, virtualenvs and __pycache__; never reads or lists dotfiles or config/secret-shaped files (.env*, *.key, *.pem, secrets*).
+- .py files over 1 MB (max_file_bytes) are skipped and listed, never opened.
+- HTML-escape every source-derived string. Reports contain names, signatures and the first docstring line (optional, --no-docstrings), never full source or string literals.
 - Resolve relative imports against the package; list unresolved/dynamic imports (importlib, __import__, star imports, imports inside try) in an "Unresolved / dynamic" section, never guess.
 - --max-files guard, default 2000, with a clear message. Exit codes: 0 ok, 2 usage, 3 target unreadable or too large.
 - Every test asserts its output is non-empty before checking content.

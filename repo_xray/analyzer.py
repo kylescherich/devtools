@@ -2,6 +2,7 @@
 
 import ast
 import os
+import stat
 import tomllib
 from pathlib import Path
 
@@ -14,6 +15,31 @@ class TargetError(Exception):
 class TooManyFiles(TargetError):
     """Too many files in the target repository."""
     pass
+
+
+def _link_reason(path):
+    """Determine if path is a symlink or reparse point.
+    
+    Args:
+        path: Path to check
+    
+    Returns:
+        None if regular file/dir, "symlink" if symlink, "reparse_point" if reparse point
+    """
+    try:
+        st = os.lstat(path)
+    except (OSError, IOError):
+        return None
+    
+    # Check for symlink
+    if stat.S_ISLNK(st.st_mode):
+        return "symlink"
+    
+    # Check for reparse point (Windows)
+    if getattr(st, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0):
+        return "reparse_point"
+    
+    return None
 
 
 def _compute_module_name(rel_path, root_path):
@@ -86,10 +112,20 @@ def _parse_file(root_path, rel_path, module_name, model):
         with open(filepath, 'r', encoding='utf-8') as f:
             source = f.read()
         tree = ast.parse(source, filename=str(rel_path))
+    except UnicodeDecodeError:
+        model["skipped"].append({
+            "path": str(rel_path.as_posix()),
+            "reason": "not_utf8"
+        })
+        return
     except SyntaxError as e:
         model["parse_errors"].append({
             "path": str(rel_path.as_posix()),
             "lineno": e.lineno or 0
+        })
+        model["skipped"].append({
+            "path": str(rel_path.as_posix()),
+            "reason": "syntax_error"
         })
         return
     except Exception:
@@ -97,7 +133,20 @@ def _parse_file(root_path, rel_path, module_name, model):
             "path": str(rel_path.as_posix()),
             "lineno": 0
         })
+        model["skipped"].append({
+            "path": str(rel_path.as_posix()),
+            "reason": "syntax_error"
+        })
         return
+    
+    # Build set of import nodes inside try blocks
+    try_import_nodes = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Try, ast.TryStar if hasattr(ast, 'TryStar') else ast.Try)):
+            # Check body, handlers, and orelse
+            for child in ast.walk(node):
+                if child is not node and isinstance(child, (ast.Import, ast.ImportFrom)):
+                    try_import_nodes.add(child)
     
     # Determine if this is a package
     is_package = rel_path.name == '__init__.py'
@@ -161,7 +210,8 @@ def _parse_file(root_path, rel_path, module_name, model):
     # Collect all imports from anywhere in the file (not just top-level)
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            _extract_raw_imports(node, module_name, package, model, module_info)
+            in_try = node in try_import_nodes
+            _extract_raw_imports(node, module_name, package, model, module_info, in_try)
     
     model["modules"][module_name] = module_info
 
@@ -251,7 +301,7 @@ def _get_attribute_name(node):
     return ""
 
 
-def _extract_raw_imports(node, module_name, package, model, module_info):
+def _extract_raw_imports(node, module_name, package, model, module_info, in_try):
     """Extract raw import information from an import node (pass 2)."""
     if isinstance(node, ast.Import):
         for alias in node.names:
@@ -259,7 +309,8 @@ def _extract_raw_imports(node, module_name, package, model, module_info):
             module_info["raw_imports"].append({
                 "kind": "import",
                 "name": alias.name,
-                "lineno": node.lineno
+                "lineno": node.lineno,
+                "in_try": in_try
             })
     elif isinstance(node, ast.ImportFrom):
         if node.module is None and node.level > 0:
@@ -308,7 +359,8 @@ def _extract_raw_imports(node, module_name, package, model, module_info):
                     "kind": "from",
                     "base": base_module,
                     "name": alias.name,
-                    "lineno": node.lineno
+                    "lineno": node.lineno,
+                    "in_try": in_try
                 })
 
 
@@ -338,6 +390,7 @@ def _resolve_imports_pass3(model):
     """Resolve raw imports to targets (pass 3, after all modules are known)."""
     for module_name, module_info in model["modules"].items():
         imports = []
+        try_imports = []
         
         for raw_import in module_info["raw_imports"]:
             if raw_import["kind"] == "import":
@@ -355,12 +408,18 @@ def _resolve_imports_pass3(model):
                 if target is None:
                     target = name
                 
-                internal = target in model["modules"]
-                imports.append({
-                    "target": target,
-                    "internal": internal,
-                    "lineno": raw_import["lineno"]
-                })
+                if raw_import["in_try"]:
+                    try_imports.append({
+                        "detail": target,
+                        "lineno": raw_import["lineno"]
+                    })
+                else:
+                    internal = target in model["modules"]
+                    imports.append({
+                        "target": target,
+                        "internal": internal,
+                        "lineno": raw_import["lineno"]
+                    })
             
             elif raw_import["kind"] == "from":
                 # from X import a - check if X.a is a module, else use X
@@ -373,14 +432,20 @@ def _resolve_imports_pass3(model):
                 else:
                     target = base
                 
-                internal = target in model["modules"]
-                imports.append({
-                    "target": target,
-                    "internal": internal,
-                    "lineno": raw_import["lineno"]
-                })
+                if raw_import["in_try"]:
+                    try_imports.append({
+                        "detail": target,
+                        "lineno": raw_import["lineno"]
+                    })
+                else:
+                    internal = target in model["modules"]
+                    imports.append({
+                        "target": target,
+                        "internal": internal,
+                        "lineno": raw_import["lineno"]
+                    })
         
-        # Deduplicate by (target, lineno) to get one entry per distinct target per statement
+        # Deduplicate imports by (target, lineno)
         seen = set()
         unique_imports = []
         for imp in imports:
@@ -390,6 +455,20 @@ def _resolve_imports_pass3(model):
                 unique_imports.append(imp)
         
         module_info["imports"] = unique_imports
+        
+        # Deduplicate try imports by (detail, lineno) and add to model["unresolved"]
+        seen_try = set()
+        for try_imp in try_imports:
+            key = (try_imp["detail"], try_imp["lineno"])
+            if key not in seen_try:
+                seen_try.add(key)
+                model["unresolved"].append({
+                    "module": module_name,
+                    "kind": "try",
+                    "detail": try_imp["detail"],
+                    "lineno": try_imp["lineno"]
+                })
+        
         del module_info["raw_imports"]
 
 
@@ -445,9 +524,9 @@ def _build_tests_pass3(model):
         })
 
 
-# Second pass to detect imports in try blocks and importlib/__import__ calls
+# Second pass to detect importlib/__import__ calls
 def _second_pass_unresolved(root_path, model):
-    """Second pass to detect dynamic imports and try blocks."""
+    """Second pass to detect dynamic imports."""
     for module_name, module_info in model["modules"].items():
         filepath = root_path / module_info["path"]
         
@@ -457,47 +536,6 @@ def _second_pass_unresolved(root_path, model):
             tree = ast.parse(source, filename=module_info["path"])
         except Exception:
             continue
-        
-        # Track try blocks
-        try_blocks = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Try):
-                try_blocks.append(node)
-        
-        # Find imports in try blocks
-        for try_node in try_blocks:
-            for node in ast.walk(try_node):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    # Mark this import as being in a try block
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            model["unresolved"].append({
-                                "module": module_name,
-                                "kind": "try",
-                                "detail": alias.name,
-                                "lineno": node.lineno
-                            })
-                            # Remove from regular imports
-                            module_info["imports"] = [
-                                imp for imp in module_info["imports"]
-                                if not (imp["target"] == alias.name and imp["lineno"] == node.lineno)
-                            ]
-                    elif isinstance(node, ast.ImportFrom):
-                        base = node.module or ''
-                        for alias in node.names:
-                            if alias.name != '*':
-                                target = f"{base}.{alias.name}" if base else alias.name
-                                model["unresolved"].append({
-                                    "module": module_name,
-                                    "kind": "try",
-                                    "detail": target,
-                                    "lineno": node.lineno
-                                })
-                                # Remove from regular imports
-                                module_info["imports"] = [
-                                    imp for imp in module_info["imports"]
-                                    if not (imp["target"] == target and imp["lineno"] == node.lineno)
-                                ]
         
         # Find importlib.import_module and __import__ calls
         for node in ast.walk(tree):
@@ -523,12 +561,13 @@ def _second_pass_unresolved(root_path, model):
                     })
 
 
-def analyze(root, max_files=2000):
+def analyze(root, max_files=2000, max_file_bytes=1_000_000):
     """Analyze a Python repository.
     
     Args:
         root: Path to the repository root
         max_files: Maximum number of .py files to scan
+        max_file_bytes: Maximum size in bytes for a single .py file
         
     Returns:
         dict: Analysis model
@@ -550,27 +589,69 @@ def analyze(root, max_files=2000):
         "entry_points": [],
         "tests": [],
         "unresolved": [],
-        "parse_errors": []
+        "parse_errors": [],
+        "skipped": []
     }
     
     # Collect all Python files
     py_files = []
     
     for dirpath, dirnames, filenames in os.walk(root_path, followlinks=False):
-        # Skip symlinked directories
-        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+        # Filter directories: skip dotfiles, __pycache__, virtualenvs, and linked dirs
+        filtered_dirs = []
+        for d in dirnames:
+            # Skip dotfiles and __pycache__
+            if d.startswith('.') or d == '__pycache__':
+                continue
+            
+            # Skip virtualenvs
+            if d in ('venv', 'env') or os.path.exists(os.path.join(dirpath, d, 'pyvenv.cfg')):
+                continue
+            
+            # Check for symlink/reparse point
+            dir_path = os.path.join(dirpath, d)
+            link_reason = _link_reason(dir_path)
+            if link_reason:
+                # Record skipped directory
+                rel_dir = Path(dir_path).relative_to(root_path)
+                model["skipped"].append({
+                    "path": str(rel_dir.as_posix()),
+                    "reason": link_reason
+                })
+                continue
+            
+            filtered_dirs.append(d)
         
-        # Skip dotfiles, __pycache__, and virtualenvs
-        dirnames[:] = [d for d in dirnames if not d.startswith('.') and d != '__pycache__']
-        dirnames[:] = [d for d in dirnames if d not in ('venv', 'env') and 
-                      not os.path.exists(os.path.join(dirpath, d, 'pyvenv.cfg'))]
+        dirnames[:] = filtered_dirs
         
-        # Collect .py files (skip symlinks)
+        # Collect .py files (skip symlinks and check size)
         for filename in filenames:
             if filename.endswith('.py'):
                 filepath = os.path.join(dirpath, filename)
-                if not os.path.islink(filepath):
-                    py_files.append(filepath)
+                rel_path = Path(filepath).relative_to(root_path)
+                
+                # Check for symlink/reparse point
+                link_reason = _link_reason(filepath)
+                if link_reason:
+                    model["skipped"].append({
+                        "path": str(rel_path.as_posix()),
+                        "reason": link_reason
+                    })
+                    continue
+                
+                # Check file size
+                try:
+                    file_size = os.lstat(filepath).st_size
+                    if file_size > max_file_bytes:
+                        model["skipped"].append({
+                            "path": str(rel_path.as_posix()),
+                            "reason": "too_large"
+                        })
+                        continue
+                except (OSError, IOError):
+                    continue
+                
+                py_files.append(filepath)
     
     # Check max_files limit
     if len(py_files) > max_files:
@@ -643,5 +724,8 @@ def analyze(root, max_files=2000):
     _second_pass_unresolved(root_path, model)
     
     _build_tests_pass3(model)
+    
+    # Sort skipped list by (reason, path)
+    model["skipped"].sort(key=lambda x: (x["reason"], x["path"]))
     
     return model

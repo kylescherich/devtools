@@ -1,7 +1,11 @@
 """Generate reports from analyzer model."""
 
 import html
+import re
 from collections import defaultdict
+
+
+DETECTED_FORMS = 'Detected forms: if __name__ == "__main__" blocks, and [project.scripts] console scripts in the root pyproject.toml.'
 
 
 def _escape_markdown(s):
@@ -18,6 +22,54 @@ def _escape_markdown(s):
 def _escape_html(s):
     """Escape for HTML output."""
     return html.escape(s, quote=True)
+
+
+def _pluralize(count, singular, plural=None):
+    """Return count with singular or plural form.
+    
+    Args:
+        count: The count
+        singular: Singular form (e.g., "package")
+        plural: Plural form (defaults to singular + "s")
+    
+    Returns:
+        str: e.g., "1 package" or "2 packages"
+    """
+    if plural is None:
+        plural = singular + 's'
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _anchor_ids(names):
+    """Generate unique, attribute-safe anchor IDs for module names.
+    
+    Args:
+        names: Iterable of module names
+    
+    Returns:
+        dict: {module_name: anchor_id}
+    """
+    ids = {}
+    used = set()
+    
+    for name in sorted(names):
+        # Start with "mod-" + name with "." -> "-"
+        base_id = "mod-" + name.replace('.', '-')
+        
+        # Replace any character not in [A-Za-z0-9_-] with "_"
+        safe_id = re.sub(r'[^A-Za-z0-9_-]', '_', base_id)
+        
+        # Handle collisions
+        final_id = safe_id
+        counter = 2
+        while final_id in used:
+            final_id = f"{safe_id}-{counter}"
+            counter += 1
+        
+        ids[name] = final_id
+        used.add(final_id)
+    
+    return ids
 
 
 def _get_most_imported_internal(model):
@@ -84,8 +136,8 @@ def summary(model):
     total_functions = sum(len(m.get('functions', [])) for m in model['modules'].values())
     total_tests = len(model.get('tests', []))
     
-    lines.append(f"Found {num_modules} modules in {num_packages} packages.")
-    lines.append(f"Total: {total_classes} classes, {total_functions} functions, {total_tests} tests.")
+    lines.append(f"Found {_pluralize(num_modules, 'module')} in {_pluralize(num_packages, 'package')}.")
+    lines.append(f"Total: {_pluralize(total_classes, 'class', 'classes')}, {_pluralize(total_functions, 'function')}, {_pluralize(total_tests, 'test module')}.")
     
     # Entry points
     entry_points = model.get('entry_points', [])
@@ -105,7 +157,9 @@ def summary(model):
     # Untested modules
     untested = _get_untested_modules(model)
     if untested:
-        lines.append(f"{len(untested)} internal non-test modules have no inferred test targets.")
+        count = len(untested)
+        verb = "has" if count == 1 else "have"
+        lines.append(f"{_pluralize(count, 'internal non-test module')} {verb} no statically inferred test target.")
     
     # Unresolved imports
     unresolved_counts = _count_unresolved_by_kind(model)
@@ -270,12 +324,13 @@ def _render_svg_graph(model):
     return '\n'.join(svg_parts)
 
 
-def render_markdown(model, title):
+def render_markdown(model, title, docstrings=True):
     """Render model as Markdown report.
     
     Args:
         model: Analyzer model dict
         title: Report title
+        docstrings: Include docstrings in output
     
     Returns:
         str: Markdown document
@@ -295,6 +350,8 @@ def render_markdown(model, title):
     
     # Entry points
     lines.append("## Entry points")
+    lines.append("")
+    lines.append(_escape_markdown(DETECTED_FORMS))
     lines.append("")
     entry_points = model.get('entry_points', [])
     if entry_points:
@@ -323,7 +380,7 @@ def render_markdown(model, title):
         lines.append(f"**Path:** {_escape_markdown(mod_info['path'])}")
         lines.append("")
         
-        if mod_info.get('docstring'):
+        if docstrings and mod_info.get('docstring'):
             lines.append(_escape_markdown(mod_info['docstring']))
             lines.append("")
         
@@ -336,13 +393,13 @@ def render_markdown(model, title):
                 if cls.get('bases'):
                     bases_str = f"({_escape_markdown(', '.join(cls['bases']))})"
                 lines.append(f"- `{_escape_markdown(cls['name'])}{bases_str}`")
-                if cls.get('docstring'):
+                if docstrings and cls.get('docstring'):
                     lines.append(f"  - {_escape_markdown(cls['docstring'])}")
                 
                 for method in cls.get('methods', []):
                     sig = _escape_markdown(f"{method['name']}{method['signature']}")
                     lines.append(f"  - `{sig}`")
-                    if method.get('docstring'):
+                    if docstrings and method.get('docstring'):
                         lines.append(f"    - {_escape_markdown(method['docstring'])}")
             lines.append("")
         
@@ -353,7 +410,7 @@ def render_markdown(model, title):
             for func in mod_info['functions']:
                 sig = _escape_markdown(f"{func['name']}{func['signature']}")
                 lines.append(f"- `{sig}`")
-                if func.get('docstring'):
+                if docstrings and func.get('docstring'):
                     lines.append(f"  - {_escape_markdown(func['docstring'])}")
             lines.append("")
         
@@ -375,8 +432,8 @@ def render_markdown(model, title):
                 lines.append(f"- {_escape_markdown(imp)}")
             lines.append("")
     
-    # Tests (inferred)
-    lines.append("## Tests \\(inferred\\)")
+    # Test modules (inferred targets)
+    lines.append("## Test modules \\(inferred targets\\)")
     lines.append("")
     
     tests = model.get('tests', [])
@@ -405,6 +462,32 @@ def render_markdown(model, title):
         lines.append("None")
     lines.append("")
     
+    # Skipped / not parsed
+    lines.append("## Skipped / not parsed")
+    lines.append("")
+    
+    skipped = model.get('skipped', [])
+    if skipped:
+        # Count by reason
+        reason_counts = {}
+        for item in skipped:
+            reason = item['reason']
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        
+        # Build summary line
+        total = len(skipped)
+        file_word = "file" if total == 1 else "files"
+        count_parts = [f"{count} {reason}" for reason, count in sorted(reason_counts.items())]
+        lines.append(f"{total} {file_word} skipped: {', '.join(count_parts)}")
+        lines.append("")
+        
+        # List each entry
+        for item in skipped:
+            lines.append(f"- {_escape_markdown(item['reason'])}: {_escape_markdown(item['path'])}")
+    else:
+        lines.append("None")
+    lines.append("")
+    
     # Parse errors
     lines.append("## Parse errors")
     lines.append("")
@@ -421,12 +504,13 @@ def render_markdown(model, title):
     return '\n'.join(lines)
 
 
-def render_html(model, title):
+def render_html(model, title, docstrings=True):
     """Render model as self-contained HTML report.
     
     Args:
         model: Analyzer model dict
         title: Report title
+        docstrings: Include docstrings in output
     
     Returns:
         str: HTML document
@@ -465,6 +549,7 @@ def render_html(model, title):
     
     # Entry points
     lines.append('<h2>Entry points</h2>')
+    lines.append(f'<p>{_escape_html(DETECTED_FORMS)}</p>')
     entry_points = model.get('entry_points', [])
     if entry_points:
         sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
@@ -486,8 +571,9 @@ def render_html(model, title):
     lines.append('<ul>')
     
     module_names = sorted(model['modules'].keys())
+    anchor_map = _anchor_ids(module_names)
     for mod_name in module_names:
-        anchor = 'mod-' + mod_name.replace('.', '-')
+        anchor = _escape_html(anchor_map[mod_name])
         lines.append(f'<li><a href="#{anchor}">{_escape_html(mod_name)}</a></li>')
     
     lines.append('</ul>')
@@ -496,12 +582,12 @@ def render_html(model, title):
     # Module details
     for mod_name in module_names:
         mod_info = model['modules'][mod_name]
-        anchor = 'mod-' + mod_name.replace('.', '-')
+        anchor = _escape_html(anchor_map[mod_name])
         
         lines.append(f'<h3 id="{anchor}">{_escape_html(mod_name)}</h3>')
         lines.append(f'<p><strong>Path:</strong> {_escape_html(mod_info["path"])}</p>')
         
-        if mod_info.get('docstring'):
+        if docstrings and mod_info.get('docstring'):
             lines.append(f'<p>{_escape_html(mod_info["docstring"])}</p>')
         
         # Classes
@@ -513,7 +599,7 @@ def render_html(model, title):
                 if cls.get('bases'):
                     bases_str = f"({_escape_html(', '.join(cls['bases']))})"
                 lines.append(f'<li><code>{_escape_html(cls["name"])}{bases_str}</code>')
-                if cls.get('docstring'):
+                if docstrings and cls.get('docstring'):
                     lines.append(f'<ul><li>{_escape_html(cls["docstring"])}</li></ul>')
                 
                 if cls.get('methods'):
@@ -521,7 +607,7 @@ def render_html(model, title):
                     for method in cls['methods']:
                         sig = _escape_html(f"{method['name']}{method['signature']}")
                         lines.append(f'<li><code>{sig}</code>')
-                        if method.get('docstring'):
+                        if docstrings and method.get('docstring'):
                             lines.append(f'<ul><li>{_escape_html(method["docstring"])}</li></ul>')
                         lines.append('</li>')
                     lines.append('</ul>')
@@ -536,7 +622,7 @@ def render_html(model, title):
             for func in mod_info['functions']:
                 sig = _escape_html(f"{func['name']}{func['signature']}")
                 lines.append(f'<li><code>{sig}</code>')
-                if func.get('docstring'):
+                if docstrings and func.get('docstring'):
                     lines.append(f'<ul><li>{_escape_html(func["docstring"])}</li></ul>')
                 lines.append('</li>')
             lines.append('</ul>')
@@ -559,8 +645,8 @@ def render_html(model, title):
                 lines.append(f'<li>{_escape_html(imp)}</li>')
             lines.append('</ul>')
     
-    # Tests (inferred)
-    lines.append('<h2>Tests (inferred)</h2>')
+    # Test modules (inferred targets)
+    lines.append('<h2>Test modules (inferred targets)</h2>')
     
     tests = model.get('tests', [])
     if tests:
@@ -588,6 +674,31 @@ def render_html(model, title):
                 parts.append(_escape_html(unres['detail']))
             parts.append(f'line {unres["lineno"]}')
             lines.append(f'<li>{", ".join(parts)}</li>')
+        lines.append('</ul>')
+    else:
+        lines.append('<p>None</p>')
+    
+    # Skipped / not parsed
+    lines.append('<h2>Skipped / not parsed</h2>')
+    
+    skipped = model.get('skipped', [])
+    if skipped:
+        # Count by reason
+        reason_counts = {}
+        for item in skipped:
+            reason = item['reason']
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        
+        # Build summary line
+        total = len(skipped)
+        file_word = "file" if total == 1 else "files"
+        count_parts = [f"{count} {reason}" for reason, count in sorted(reason_counts.items())]
+        lines.append(f'<p>{total} {file_word} skipped: {", ".join(count_parts)}</p>')
+        
+        # List each entry
+        lines.append('<ul>')
+        for item in skipped:
+            lines.append(f'<li>{_escape_html(item["reason"])}: {_escape_html(item["path"])}</li>')
         lines.append('</ul>')
     else:
         lines.append('<p>None</p>')
