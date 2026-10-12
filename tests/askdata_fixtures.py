@@ -482,3 +482,18 @@ def privacy_db(directory):
     conn.close()
     
     return path
+
+
+def headerless_csv(directory):
+    """Create a headerless CSV with 20 rows of three integers.
+    
+    Returns path to the created file.
+    """
+    directory = Path(directory)
+    path = directory / "headerless.csv"
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        for i in range(20):
+            f.write(f"{i},{i*10},{i*100}\n")
+    
+    return path

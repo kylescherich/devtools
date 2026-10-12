@@ -94,9 +94,13 @@ def render_terminal(model):
         lines.append(f"Encoding: {model['encoding']}")
         lines.append(f"Delimiter: {repr(model['delimiter'])}")
         lines.append(f"Has header: {model['has_header']}")
-        lines.append(f"Row count: {model['row_count']:,}")
+        lines.append(f"Rows analyzed: {model['rows_analyzed']:,}")
+        lines.append(f"Malformed rows skipped: {model['malformed_skipped']:,}")
+        if model['physical_rows_exact']:
+            lines.append(f"Physical data rows: {model['physical_rows']:,}")
+        else:
+            lines.append(f"Physical data rows: ≥ {model['physical_rows']:,} (counting stopped at timeout)")
         lines.append(f"Sampled: {model['sampled']}")
-        lines.append(f"Malformed: {model['malformed']['count']:,}")
         if model['malformed']['first_lines']:
             lines.append(f"  First malformed lines: {model['malformed']['first_lines']}")
     else:  # sqlite
@@ -174,9 +178,13 @@ def render_terminal(model):
                 # Stats
                 lines.append(f"    Missing: {col['missing']:,}")
                 
-                distinct_str = f"{col['distinct']:,}"
-                if not col['distinct_exact']:
-                    distinct_str = f"≥ {distinct_str} (sampled)"
+                # Distinct with proper labeling
+                if col['distinct_exact']:
+                    distinct_str = f"{col['distinct']:,} (exact)"
+                elif col['distinct'] >= 100000:
+                    distinct_str = f"≥ 100,000 (estimated)"
+                else:
+                    distinct_str = f"{col['distinct']:,} (estimated, sample)"
                 lines.append(f"    Distinct: {distinct_str}")
                 
                 if col['samples']:
@@ -193,11 +201,13 @@ def render_terminal(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}")
+                            median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
+                            lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_str}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}")
+                        median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
+                        lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_str}")
                 
                 if col.get('dates'):
                     dates = col['dates']
@@ -254,14 +264,20 @@ def render_md(model):
         lines.append("")
         lines.append(f"**Has header:** {model['has_header']}")
         lines.append("")
-        lines.append(f"**Row count:** {model['row_count']:,}")
+        lines.append(f"**Rows analyzed:** {model['rows_analyzed']:,}")
+        lines.append("")
+        lines.append(f"**Malformed rows skipped:** {model['malformed_skipped']:,}")
+        lines.append("")
+        if model['physical_rows_exact']:
+            lines.append(f"**Physical data rows:** {model['physical_rows']:,}")
+        else:
+            lines.append(f"**Physical data rows:** ≥ {model['physical_rows']:,} (counting stopped at timeout)")
         lines.append("")
         lines.append(f"**Sampled:** {model['sampled']}")
         lines.append("")
-        lines.append(f"**Malformed:** {model['malformed']['count']:,}")
         if model['malformed']['first_lines']:
-            lines.append(f" (first lines: {model['malformed']['first_lines']})")
-        lines.append("")
+            lines.append(f"**First malformed lines:** {model['malformed']['first_lines']}")
+            lines.append("")
     else:  # sqlite
         table_count = len([t for t in model['tables'] if t['type'] == 'table'])
         view_count = len([t for t in model['tables'] if t['type'] == 'view'])
@@ -357,10 +373,13 @@ def render_md(model):
                 # Missing
                 row.append(f"{col['missing']:,}")
                 
-                # Distinct
-                distinct_str = f"{col['distinct']:,}"
-                if not col['distinct_exact']:
-                    distinct_str = f"≥ {distinct_str} (sampled)"
+                # Distinct with proper labeling
+                if col['distinct_exact']:
+                    distinct_str = f"{col['distinct']:,} (exact)"
+                elif col['distinct'] >= 100000:
+                    distinct_str = f"≥ 100,000 (estimated)"
+                else:
+                    distinct_str = f"{col['distinct']:,} (estimated, sample)"
                 row.append(distinct_str)
                 
                 # Samples
@@ -382,11 +401,13 @@ def render_md(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                            median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
+                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                        median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
+                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
                 
                 if col.get('dates'):
                     dates = col['dates']
@@ -463,12 +484,15 @@ def render_html(model):
         lines.append(f'<p><strong>Encoding:</strong> {model["encoding"]}</p>')
         lines.append(f'<p><strong>Delimiter:</strong> {_escape_html(repr(model["delimiter"]))}</p>')
         lines.append(f'<p><strong>Has header:</strong> {model["has_header"]}</p>')
-        lines.append(f'<p><strong>Row count:</strong> {model["row_count"]:,}</p>')
+        lines.append(f'<p><strong>Rows analyzed:</strong> {model["rows_analyzed"]:,}</p>')
+        lines.append(f'<p><strong>Malformed rows skipped:</strong> {model["malformed_skipped"]:,}</p>')
+        if model['physical_rows_exact']:
+            lines.append(f'<p><strong>Physical data rows:</strong> {model["physical_rows"]:,}</p>')
+        else:
+            lines.append(f'<p><strong>Physical data rows:</strong> ≥ {model["physical_rows"]:,} (counting stopped at timeout)</p>')
         lines.append(f'<p><strong>Sampled:</strong> {model["sampled"]}</p>')
-        lines.append(f'<p><strong>Malformed:</strong> {model["malformed"]["count"]:,}')
         if model['malformed']['first_lines']:
-            lines.append(f' (first lines: {model["malformed"]["first_lines"]})')
-        lines.append('</p>')
+            lines.append(f'<p><strong>First malformed lines:</strong> {model["malformed"]["first_lines"]}</p>')
     else:  # sqlite
         table_count = len([t for t in model['tables'] if t['type'] == 'table'])
         view_count = len([t for t in model['tables'] if t['type'] == 'view'])
@@ -569,10 +593,13 @@ def render_html(model):
                 # Missing
                 lines.append(f'<td>{col["missing"]:,}</td>')
                 
-                # Distinct
-                distinct_str = f"{col['distinct']:,}"
-                if not col['distinct_exact']:
-                    distinct_str = f"≥ {distinct_str} (sampled)"
+                # Distinct with proper labeling
+                if col['distinct_exact']:
+                    distinct_str = f"{col['distinct']:,} (exact)"
+                elif col['distinct'] >= 100000:
+                    distinct_str = f"≥ 100,000 (estimated)"
+                else:
+                    distinct_str = f"{col['distinct']:,} (estimated, sample)"
                 lines.append(f'<td>{distinct_str}</td>')
                 
                 # Samples
@@ -594,11 +621,13 @@ def render_html(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                            median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
+                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
+                        median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
+                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
                 
                 if col.get('dates'):
                     dates = col['dates']
