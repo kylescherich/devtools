@@ -45,7 +45,8 @@ def _build_parser():
     parser.add_argument("--raw", action="store_true",
                         help="include up to 2 redacted raw examples per group "
                              "(off by default)")
-    parser.add_argument("--format", choices=["auto", "text", "jsonl"], default="auto",
+    parser.add_argument("--input-format", choices=["auto", "text", "jsonl"],
+                        default="auto",
                         help="input format (default: jsonl for .jsonl/.ndjson, "
                              "else text)")
     parser.add_argument("--year", type=int,
@@ -82,7 +83,7 @@ def main(argv=None):
     try:
         result = read_logs(args.files, year=args.year, fields=args.field,
                            max_bytes=args.max_bytes, max_lines=args.max_lines,
-                           fmt=args.format)
+                           fmt=args.input_format)
     except UsageError as exc:
         return _fail(str(exc), EXIT_USAGE)
     except InputError as exc:
