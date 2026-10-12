@@ -17,11 +17,27 @@ import re
 
 REDACTED = "<redacted>"
 
-# Long keys match anywhere (db_password=); the short ones pass, pwd and auth
-# must not follow a letter, so db_pass= and X-Auth: match but bypass= and
-# oauth= do not.
-_KEYS = (r"(?:password|passwd|passphrase|secret|token|api_key|api-key|apikey"
-         r"|credentials|credential|(?<![A-Za-z])(?:pass|pwd|auth))")
+# A key is a whole identifier [A-Za-z0-9_.-]+ (case-insensitive). It is
+# sensitive when it contains one of the long words anywhere (AWS_SECRET_ACCESS_KEY,
+# refresh_token), or one of the short words as a whole component: bounded on
+# both sides by the identifier's start/end, a non-letter or a camelCase hump.
+# So db_pass=, X-Auth:, dbPass=, sas_sig= match; bypass=, oauth_state=,
+# design=, passenger=, authority=, signal= do not.
+_ID = r"[A-Za-z0-9_.-]"
+_ID_START = r"(?<![A-Za-z0-9_.-])"
+_LONG = (r"(?:password|passwd|passphrase|secret|token|api[_-]?key|credential"
+         r"|private[_-]?key|access[_-]?key|account[_-]?key|signature)")
+# Scoped case-sensitive: a lower-case letter directly before an upper-case one.
+_HUMP = r"(?-i:(?<=[a-z])(?=[A-Z]))"
+_LEFT = r"(?:(?<![A-Za-z])|" + _HUMP + r")"
+_RIGHT = r"(?:(?![A-Za-z])|" + _HUMP + r")"
+_SHORT = _LEFT + r"(?:pass|pwd|sig|auth)" + _RIGHT
+_KEYS = _ID_START + _ID + r"*?(?:" + _LONG + r"|" + _SHORT + r")" + _ID + r"*+"
+# Values that say something about the secret rather than being it.
+_KEEP_WORDS = (r"(?:expired|invalid|missing|none|null|empty|true|false|present"
+               r"|absent|revoked|ok)")
+_VALUE_END = r"(?:[\s,;&\"'}\]]|\Z)"
+_KEEP_VALUE = (r"(?![\"']?+" + _KEEP_WORDS + r"[\"']?+" + _VALUE_END + r")")
 # The marker as reports print it: plain, or HTML-escaped in md/html output.
 _MARK = r"(?:<redacted>|&lt;redacted&gt;)"
 # Skip a value that already is just the marker, up to where the rule would
@@ -31,6 +47,17 @@ _MARK = r"(?:<redacted>|&lt;redacted&gt;)"
 _DONE_AUTH = r"(?!" + _MARK + r"(?:[\"'\r\n]|\Z))"
 _DONE_KEY = (r"(?!(?P<dq>[\"'])" + _MARK + r"(?P=dq)"
              r"|" + _MARK + r"(?:[\s,;&\"'}\]]|\Z))")
+
+
+def _scheme_token(match):
+    """Redact the token after Basic/Bearer when it looks like one: >= 8
+    characters with a digit, one of + / =, or an upper-case letter after the
+    first. "Basic authentication failed" and "Bearer token missing" stay."""
+    token = match.group(1)
+    if len(token) >= 8 and (any(c.isdigit() or c in "+/=" for c in token)
+                            or any(c.isupper() for c in token[1:])):
+        return match.group(0)[:match.start(1) - match.start(0)] + REDACTED
+    return match.group(0)
 
 
 def _keep_quotes(match):
@@ -47,9 +74,12 @@ _RULES = [
     (re.compile(r"(?i)(authorization[\"']?\s*+[:=]\s*+[\"']?+)" + _DONE_AUTH
                 + r"[^\"'\r\n]+"),
      r"\1" + REDACTED),
-    (re.compile(r"(?i)(\bbearer\s+)[A-Za-z0-9._~+/=-]+"), r"\1" + REDACTED),
-    # key=value, key: value, "key": "value", 'key': 'value' (quotes kept).
-    (re.compile(r"(?i)(" + _KEYS + r"[\"']?\s*+[:=]\s*+)" + _DONE_KEY
+    # "Basic <token>" / "Bearer <token>" anywhere; see _scheme_token.
+    (re.compile(r"(?i)\b(?:basic|bearer)[ \t]++([A-Za-z0-9._~+/=-]+)"), _scheme_token),
+    # key=value, key: value, "key": "value", 'key': 'value' (quotes kept). A
+    # scheme word before the value ("X-Auth: Bearer abc") goes with it.
+    (re.compile(r"(?i)(" + _KEYS + r"[\"']?\s*+[:=]\s*+)" + _DONE_KEY + _KEEP_VALUE
+                + r"(?:(?:basic|bearer|digest|token)[ \t]++(?=[^\s,;&\"'}\]]))?"
                 + r"(?:(?P<q2>\")(?:[^\"\\\r\n]|\\.)*\"|(?P<q1>')(?:[^'\\\r\n]|\\.)*'"
                 r"|[^\s,;&\"'}\]]+)"),
      _keep_quotes),
@@ -62,7 +92,12 @@ _RULES = [
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{10,}"), REDACTED),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{10,}"), REDACTED),
-    (re.compile(r"\bAKIA[A-Z0-9]{16}\b"), REDACTED),
+    # Provider token shapes, wherever they appear.
+    (re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}"), REDACTED),
     (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), REDACTED),
     # 16-digit numbers: plain, or 4-4-4-4 with one consistent space/dash.
     (re.compile(r"(?<![\d])\d{4}([ -]?)\d{4}\1\d{4}\1\d{4}(?![\d])"), REDACTED),

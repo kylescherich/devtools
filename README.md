@@ -139,6 +139,24 @@ It does **not** promise general PII redaction: free-text names and postal
 addresses are not detected. Do not run Log Lens on logs you would not show in
 a terminal.
 
+Details:
+
+- Keys (`key=v`, `key: v`, `"key": "v"`, `'key': 'v'`; case-insensitive) are
+  matched by name: any identifier containing `password`, `passwd`,
+  `passphrase`, `secret`, `token`, `api_key`/`apikey`, `credential`,
+  `private_key`, `access_key`, `account_key` or `signature`
+  (`AWS_SECRET_ACCESS_KEY=`, `refresh_token=`, `AccountKey=`). The short
+  words `pass`, `pwd`, `sig` and `auth` count only as a whole name component
+  (`db_pass=`, `dbPass=`, `X-Auth:`, `sas_sig=`, but not `bypass=`,
+  `oauth_state=`, `design=`, `signal=`). Names that merely contain a word are
+  redacted too, so `tokens: 5` becomes `tokens: <redacted>`.
+- Provider token shapes anywhere: AWS (`AKIA`/`ASIA`), Slack (`xox?-`),
+  GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
+  GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.
+- `Basic <token>` / `Bearer <token>` anywhere, when the token looks like one
+  (8+ characters with a digit, `+`, `/`, `=` or an inner capital), so "Basic
+  authentication failed" stays; the whole `Authorization:` value always.
+
 ## Exit codes
 
 When several apply, the leftmost wins: 2 > 3 > 4 > 1 > 0.

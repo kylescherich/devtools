@@ -41,6 +41,9 @@ SECRET_CASES = [
     ("yankee", 'payload {"credential": "SNTcred4"} sent', "SNTcred4"),
     ("zulu", "proxy auth=SNTauth5 ok", "SNTauth5"),
     ("amber", "mail sent to sntmail6@example.test ok", "sntmail6"),
+    # M1.2 classes (BRIEF-DEVWS-021): one sentinel each.
+    ("cobalt", "slack post xoxb-SNTslackCobalt-0123 ok", "SNTslackCobalt"),
+    ("copper", "retry with Bearer SNTbareCopper42 now", "SNTbareCopper42"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]
@@ -261,7 +264,8 @@ class TestRedaction(GroupTestCase):
         self.assertEqual(redact("x -----BEGIN PRIVATE KEY-----\nSNTabc"), f"x {REDACTED}")
 
     def test_ordinary_text_untouched(self):
-        text = "user 42 logged in from 10.0.0.1 after 1234 ms; tokens: 5"
+        # "tokens: 5" is redacted since keys match by name-contains (DEC-189).
+        text = "user 42 logged in from 10.0.0.1 after 1234 ms; retries: 5"
         self.assertEqual(redact(text), text)
 
 
