@@ -1,5 +1,6 @@
 """Tests for SQLite database inspection."""
 import unittest
+import unittest.mock
 import tempfile
 import time
 import hashlib
@@ -264,6 +265,38 @@ class TestSQLiteInspect(unittest.TestCase):
                 conn.execute("PRAGMA query_only=0")
             
             conn.close()
+    
+    def test_ro_uri_flags(self):
+        """Test that open_readonly uses correct URI flags."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            
+            # Capture the real connect function before patching
+            real_connect = sqlite3.connect
+            
+            # Track calls
+            calls = []
+            
+            def side_effect_wrapper(*args, **kwargs):
+                calls.append((args, kwargs))
+                return real_connect(*args, **kwargs)
+            
+            with unittest.mock.patch("askdata.sqliteinspect.sqlite3.connect", side_effect=side_effect_wrapper):
+                conn = open_readonly(path)
+                conn.close()
+            
+            # Assert exactly one connect call
+            self.assertEqual(len(calls), 1)
+            
+            args, kwargs = calls[0]
+            
+            # First argument should start with "file:" and contain mode=ro and immutable=1
+            self.assertTrue(args[0].startswith("file:"))
+            self.assertIn("mode=ro", args[0])
+            self.assertIn("immutable=1", args[0])
+            
+            # kwargs should have uri=True
+            self.assertTrue(kwargs.get("uri"))
     
     def test_column_keys_complete(self):
         """Test that every column has exactly the required keys."""
