@@ -110,9 +110,8 @@ give byte-identical output; the current date or time never appears.
   signatures: messages with numbers, IDs, IPs, paths, URLs, e-mails and quoted
   strings replaced by placeholders such as `<n>` and `<path>`.
 - Everything printed or written passes through one redaction function, with no
-  way to turn it off: bearer/Authorization values, password/secret/token/API-key
-  values, GitHub/`sk-`/AWS keys, JWTs, PEM blocks and 16-digit card numbers
-  become `<redacted>`, also under `--raw`.
+  way to turn it off (the report header always says `redaction: on`); it also
+  applies under `--raw`. See "What is redacted" below.
 - Control characters and bidi overrides in log text are shown as `\xNN` /
   `\uXXXX`; in text and Markdown a literal backslash from the log is shown
   doubled (`\\`), so a typed `\x1b` reads `\\x1b` and only a real control
@@ -123,6 +122,22 @@ give byte-identical output; the current date or time never appears.
   directory of any input file (so `loglens app.log --output report.txt` run
   next to `app.log` is refused; write elsewhere). No network, no subprocess,
   no tailing.
+
+### What is redacted (the privacy boundary)
+
+Log Lens redacts:
+
+- credentials and secrets: values of labelled keys, known provider token
+  shapes, auth headers, URL passwords, PEM blocks and JWTs;
+- session material: cookies, session ids, CSRF/refresh tokens, client secrets;
+- e-mail addresses;
+- payment card numbers (13-19 digits passing the Luhn check);
+- values of explicitly labelled personal fields (`phone`, `tel`, `mobile`,
+  `dob`, `birth_date`, `ssn`, `patient_id`, `member_id`, `customer_id`, `mrn`).
+
+It does **not** promise general PII redaction: free-text names and postal
+addresses are not detected. Do not run Log Lens on logs you would not show in
+a terminal.
 
 ## Exit codes
 

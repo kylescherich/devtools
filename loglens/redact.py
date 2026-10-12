@@ -1,5 +1,18 @@
 """The one redaction function. Everything loglens prints or writes passes
-through redact(); there is deliberately no switch to turn it off."""
+through redact(); there is deliberately no switch to turn it off.
+
+Privacy boundary. Log Lens redacts:
+- credentials and secrets: values of labelled keys, known provider token
+  shapes, auth headers, URL passwords, PEM blocks and JWTs;
+- session material: cookies, session ids, CSRF/refresh tokens, client secrets;
+- e-mail addresses;
+- payment card numbers (13-19 digits passing the Luhn check);
+- values of explicitly labelled personal fields (phone, tel, mobile, dob,
+  birth_date, ssn, patient_id, member_id, customer_id, mrn).
+It does NOT promise general PII redaction: free-text names and postal
+addresses are not detected. Do not run Log Lens on logs you would not show in
+a terminal.
+"""
 import re
 
 REDACTED = "<redacted>"
