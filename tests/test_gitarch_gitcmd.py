@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 import gitarch.gitcmd
+from gitarch import history
 from gitarch.cli import EXIT_GIT, EXIT_USAGE, main
 from gitarch.gitcmd import (ALLOWED, CONFIG, GIT_ENV, CommandRefused, Git, GitError,
                             UsageError, rev_args)
@@ -221,6 +222,20 @@ class TestHostileRepo(GitTestCase):
         code, out, _ = run_cli([repo, "--rev", "signed"])
         self.assertEqual(code, 0)
         self.assertTrue(out)
+        # Every history model path: revisions, a followed file, a directory,
+        # authors, a short recent window.
+        git = Git(repo)
+        for kwargs in ({}, {"rev": "signed"}, {"rev": "main~1"},
+                       {"rev": "signed", "path": "lib/helpers.py"},
+                       {"path": "app.py", "authors": True}, {"path": "lib"},
+                       {"rev": "signed", "authors": True, "recent_days": 1}):
+            model = history.build(git, **kwargs)
+            self.assertTrue(model.overview.commits, kwargs)
+            if kwargs.get("path") == "lib/helpers.py":
+                self.assertTrue(model.followed)
+                self.assertEqual([(r.old, r.new) for r in model.files[0].renames],
+                                 [("lib/util.py", "lib/helpers.py")])
+        self.assertEqual(history.build(git, rev="signed").overview.commits, 4)
         self.assertFalse(marker.exists(), "gitarch let git run an external program")
 
         # The trap is live: run directly, it writes the marker ...
