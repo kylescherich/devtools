@@ -1,16 +1,16 @@
 # HANDOFF — devtools
 
-## Status
-- BRIEF-DEVWS-015 task 1 (bootstrap) done: package `repo_xray`, console script `repo-xray`, CLI prints usage and exits 2, one unittest.
-- No analysis code yet.
+## Status (BRIEF-DEVWS-015, branch devtools/repo-xray-mvp)
+- Tasks 1–5 done. `repo-xray <path> --output <file> [--format html|md] [--max-files N]`; exit 0 ok, 2 usage (incl. output inside target), 3 target unreadable/too large.
+- Analyzer: stdlib `ast` only, three passes (module names from package structure, collisions, internal vs external); imports collected anywhere in a file; try/importlib/star/`__import__` imports listed as unresolved/dynamic, never guessed. Reads only `.py` and the console-scripts table of `pyproject.toml`; never executes target code; no symlinks, no dotfiles.
+- Reports: Markdown + single-file HTML with inline-SVG dependency graph; every source-derived string escaped; names, signatures and first docstring lines only.
+- Tests: 29 (`python3 -m unittest discover -v`), incl. hostile-name escaping and a byte-hash check that the target is unchanged.
+- Acceptance runs (read-only): pharmacy-rag 35 modules, 3 try-imports unresolved; powerplan 13 modules, none unresolved; both repos' git HEAD + status identical before and after.
 
-## Next tasks (BRIEF-DEVWS-015, branch devtools/repo-xray-mvp)
-2. Analyzer: file walk + ast extraction into a plain dict model (packages, modules, entry points, classes, functions with signatures and first docstring line, imports). Fixture package under tests/fixtures/ covering relative imports, a star import, an importlib call, a class with methods, and a test file that imports two modules.
-3. Report: Markdown and single-file HTML renderers from the model; inline-SVG module dependency graph (simple layered layout, no external assets); escaping test with a fixture whose docstring contains <script>.
-4. CLI + end-to-end: `repo-xray <path> --output <file> [--format html|md] [--max-files N]`; exit 0 ok, 2 usage, 3 target unreadable or too large; e2e test on the fixture and on devtools itself (output parses with html.parser and contains the fixture module names).
-5. Acceptance runs on powerplan and pharmacy-rag, read-only; git status of both unchanged.
-
-Then: PR from devtools/repo-xray-mvp; Kyle merges.
+## Next
+- Kyle opens the PR devtools/repo-xray-mvp → main and merges (deploy key cannot open PRs).
+- Hub acceptance: clean-clone test run, mutation spot-check, Kyle's own first-milestone run, then the ChatGPT review before Ask My Data is scoped.
+- Known nits: "1 packages" plural in the summary.
 
 ## Rules
 See CLAUDE.md "Hard rules for repo_xray". Tests: python3 -m unittest discover -v
