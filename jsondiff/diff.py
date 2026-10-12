@@ -3,7 +3,7 @@
 Changes flagged breaking are candidates for review ("potentially breaking —
 review"), not a verdict that something will break.
 """
-from jsondiff.shape import DEPTH_MARK, ROOT, UsageError, parse_keys
+from jsondiff.shape import DEPTH_MARK, UsageError, parse_keys
 
 ADDED = "added"
 REMOVED = "removed"
@@ -19,6 +19,7 @@ CATEGORIES = (ADDED, REMOVED, TYPE_CHANGED, BECAME_NULLABLE, NO_LONGER_NULLABLE,
 BREAKING = frozenset({REMOVED, TYPE_CHANGED, BECAME_OPTIONAL, BECAME_NULLABLE})
 BREAKING_LABEL = "potentially breaking — review"
 UNKEYED_NOTE = "array elements compared by merged shape, not position"
+ALWAYS_EMPTY_NEW = "array always empty in new file"
 
 
 def _change(path, category, detail):
@@ -56,13 +57,30 @@ def _compare(path, old, new):
 
 
 def _enclosing_arrays(path):
-    """Array paths whose elements contain `path` (`a[].b[].c` -> a, a[].b)."""
+    """Array paths whose elements contain `path` (`a[].b[].c` -> a, a[].b).
+
+    `[]` inside an escaped key segment such as `["[]"]` is not an array.
+    """
     arrays = []
-    index = path.find("[]")
-    while index != -1:
-        arrays.append(path[:index] or ROOT)
-        index = path.find("[]", index + 2)
+    i = 0
+    while i < len(path):
+        if path.startswith('["', i):
+            i += 2
+            while i < len(path) and not path.startswith('"]', i):
+                i += 2 if path[i] == "\\" else 1
+            i += 2
+        elif path.startswith("[]", i):
+            arrays.append(path[:i])
+            i += 2
+        else:
+            i += 1
     return arrays
+
+
+def _always_empty_in(paths, path):
+    """True when an array enclosing `path` is always empty in `paths`."""
+    return any(paths.get(array + "[]", {}).get("empty_array")
+               for array in _enclosing_arrays(path))
 
 
 def _array_summaries(changes):
@@ -133,8 +151,18 @@ def diff_shapes(old, new, keys=None, keyed_inputs=None):
         if path not in old_paths:
             changes.append(_change(path, ADDED, _type_list(new_paths[path])))
         elif path not in new_paths:
-            changes.append(_change(path, REMOVED, _type_list(old_paths[path])))
-        elif not path.endswith(DEPTH_MARK):
+            detail = (ALWAYS_EMPTY_NEW if _always_empty_in(new_paths, path)
+                      else _type_list(old_paths[path]))
+            changes.append(_change(path, REMOVED, detail))
+        elif path.endswith(DEPTH_MARK):
+            continue
+        elif old_paths[path].get("empty_array") != new_paths[path].get("empty_array"):
+            # Empty is not a type: elements appearing are added, vanishing removed.
+            if old_paths[path].get("empty_array"):
+                changes.append(_change(path, ADDED, _type_list(new_paths[path])))
+            else:
+                changes.append(_change(path, REMOVED, ALWAYS_EMPTY_NEW))
+        else:
             changes.extend(_compare(path, old_paths[path], new_paths[path]))
     changes.extend(_array_summaries(changes))
     order = {c: i for i, c in enumerate(CATEGORIES)}

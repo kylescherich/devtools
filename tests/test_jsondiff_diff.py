@@ -117,6 +117,41 @@ class TestCategories(DiffTestCase):
         summary = self.only(result, "array element shape changed")
         self.assertEqual(list(summary), ["$"])
 
+    def assert_no_empty_type_change(self, result):
+        for change in self.changes(result, "type changed"):
+            self.assertNotIn("empty", change["detail"])
+
+    def test_always_empty_array_gaining_elements_is_added(self):
+        result = self.diff({"items": []}, {"items": [{"sku": "A", "qty": 1}]})
+        added = self.only(result, "added")
+        self.assertEqual(sorted(added), ["items[]", "items[].qty", "items[].sku"])
+        self.assertFalse(any(c["breaking"] for c in added.values()))
+        self.assertEqual(self.changes(result, "type changed"), [])
+        self.assertEqual(self.changes(result, "removed"), [])
+        self.assert_no_empty_type_change(result)
+
+    def test_array_becoming_always_empty_is_removed(self):
+        result = self.diff({"items": [{"sku": "A"}, {"sku": "B"}]}, {"items": []})
+        removed = self.only(result, "removed")
+        self.assertEqual(sorted(removed), ["items[]", "items[].sku"])
+        for change in removed.values():
+            self.assertTrue(change["breaking"])
+            self.assertEqual(change["detail"], "array always empty in new file")
+        self.assertEqual(self.changes(result, "type changed"), [])
+        self.assertEqual(self.changes(result, "no longer nullable"), [])
+        self.assert_no_empty_type_change(result)
+
+    def test_both_always_empty_is_unchanged(self):
+        result = self.diff({"items": []}, {"items": []})
+        self.assertEqual(result["changes"], [])
+        self.assertGreater(result["unchanged"], 0)
+
+    def test_brackets_inside_escaped_key_are_not_an_array(self):
+        result = self.diff({"[]": 1}, {"[]": "x"})
+        self.assertTrue(result["changes"])
+        self.assertIn('["[]"]', self.only(result, "type changed"))
+        self.assertEqual(self.changes(result, "array element shape changed"), [])
+
     def test_breaking_flags_exactly_as_specified(self):
         result = self.diff(
             [{"keep": 1, "gone": 1, "retype": 1, "nul": 1, "unnul": None,
