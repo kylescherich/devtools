@@ -540,7 +540,7 @@ def render_html(model, title):
     module_names = sorted(model['modules'].keys())
     anchor_map = _anchor_ids(module_names)
     for mod_name in module_names:
-        anchor = _escape_html(anchor_map[mod_name], quote=True)
+        anchor = _escape_html(anchor_map[mod_name])
         lines.append(f'<li><a href="#{anchor}">{_escape_html(mod_name)}</a></li>')
     
     lines.append('</ul>')
@@ -549,7 +549,7 @@ def render_html(model, title):
     # Module details
     for mod_name in module_names:
         mod_info = model['modules'][mod_name]
-        anchor = _escape_html(anchor_map[mod_name], quote=True)
+        anchor = _escape_html(anchor_map[mod_name])
         
         lines.append(f'<h3 id="{anchor}">{_escape_html(mod_name)}</h3>')
         lines.append(f'<p><strong>Path:</strong> {_escape_html(mod_info["path"])}</p>')
