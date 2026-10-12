@@ -1,5 +1,12 @@
 # HANDOFF — devtools
 
+## Status: Git Archaeologist M1 (BRIEF-DEVWS-022 / DEC-198, branch devtools/gitarch-m1, no PR)
+- Tasks 1-5 done, one commit each: bootstrap + safety rules in CLAUDE.md; hardened git runner (gitarch/gitcmd.py: allow-list, mandatory -c flags, --no-ext-diff/--no-textconv, cleared GIT_* env, timeout, 100 MB cap, --rev after --end-of-options); history model (overview, file timeline with renames, deleted files, hotspots all-time/recent, weekly/monthly activity); reports text/md/html with --authors, --path, --messages, --diffs; CLI --output guards (no overwrite without --force, no symlink, never inside the repository) and e2e tests.
+- Tests: 383 in total (was 342); both interpreters OK. Hostile repo (fsmonitor, hooksPath, pager, textconv, external diff, filters, gpg.program, showSignature, a gpgsig commit) never runs its trap in any CLI mode or format. Mutations (drop --no-textconv, drop GIT_* env clearing, subjects by default) each fail tests.
+
+### Next (gitarch)
+- Kyle reviews devtools/gitarch-m1 and opens the PR.
+
 ## Status: Log Lens M1.2 (BRIEF-DEVWS-021 / DEC-189, branch devtools/loglens-m1-2, no PR)
 - Items 0-5 done, one commit each: privacy boundary in README + redact.py docstring; name-contains keys (pass/pwd/sig/auth as whole components), provider shapes, bare Basic/Bearer; session material (csrf/xsrf/cookie, session/sid last component, Cookie headers to end of line); Luhn-checked cards (13-19 digits) and labelled personal fields (whole component anywhere); multi-word values and spoken forms; URL userinfo only with ":", keep-words, documented over-redaction.
 - Tests: 339 in total (was 332); both interpreters OK. Mutations (Luhn removed, exact keys, multi-word extent removed) each fail tests.
