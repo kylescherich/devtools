@@ -255,15 +255,43 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings, sampl
     row_count = cursor.fetchone()[0]
     table_info["row_count"] = row_count
     
+    # Determine row order
+    order = "none"
+    order_clause = ""
+    
+    # Try rowid first
+    try:
+        conn.execute(f"SELECT rowid FROM {quoted_name} LIMIT 0")
+        order = "rowid"
+        order_clause = " ORDER BY rowid"
+    except sqlite3.DatabaseError:
+        # No rowid, check for primary key
+        cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
+        pragma_columns = cursor.fetchall()
+        pk_cols = [(col[0], col[1]) for col in pragma_columns if col[5] > 0]  # col[5] is pk
+        
+        if pk_cols:
+            # Sort by pk column order
+            pk_cols.sort(key=lambda x: x[0])
+            pk_names = [_quote_identifier(col[1]) for col in pk_cols]
+            order = "primary key"
+            order_clause = " ORDER BY " + ", ".join(pk_names)
+    
+    table_info["order"] = order
+    
     # Determine if we need to sample
     sampled = row_count > max_rows
     table_info["sampled"] = sampled
     
     if sampled:
         warnings.append(f"{obj_name}: sampled first {max_rows} rows")
-        src_query = f"SELECT * FROM {quoted_name} LIMIT {max_rows}"
+        table_info["rows_analyzed"] = max_rows
+        src_query = f"SELECT * FROM {quoted_name}{order_clause} LIMIT {max_rows}"
     else:
-        src_query = f"SELECT * FROM {quoted_name}"
+        if order_clause:
+            src_query = f"SELECT * FROM {quoted_name}{order_clause}"
+        else:
+            src_query = f"SELECT * FROM {quoted_name}"
     
     # Get column info from PRAGMA
     cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
@@ -288,6 +316,11 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings, sampl
     indexes = [row[1] for row in index_rows]  # row[1] is the index name
     table_info["indexes"] = indexes
     
+    # Get column info from PRAGMA (if not already fetched for pk detection)
+    if order == "rowid":
+        cursor = conn.execute(f"PRAGMA table_info({quoted_name})")
+        pragma_columns = cursor.fetchall()
+    
     # Analyze each column
     for col_idx, pragma_col in enumerate(pragma_columns):
         # Check deadline before each column
@@ -308,14 +341,14 @@ def _analyze_table(conn, obj_name, obj_type, max_rows, deadline, warnings, sampl
         }
         
         # Analyze column statistics
-        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples)
+        _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples, order_clause)
         
         table_info["columns"].append(col_info)
     
     return table_info
 
 
-def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples):
+def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info, warnings, samples, order_clause=""):
     """Analyze statistics for a single column."""
     quoted_col = _quote_identifier(col_name)
     
@@ -450,25 +483,46 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
     
     # Numeric statistics for int/float/mixed with numeric candidate
     if col_info["type"] in ("int", "float") or (col_info["type"] == "mixed" and col_info["candidate"] in ("int", "float")):
+        # Get min, max, mean in one query
         cursor = conn.execute(f"""
-            SELECT {quoted_col}
+            SELECT MIN({quoted_col}), MAX({quoted_col}), AVG({quoted_col}), COUNT(*)
             FROM ({src_query})
             WHERE typeof({quoted_col}) IN ('integer', 'real')
-            ORDER BY {quoted_col}
         """)
-        numeric_values = [row[0] for row in cursor.fetchall()]
+        min_val, max_val, mean_val, count = cursor.fetchone()
         
-        if numeric_values:
-            min_val = min(numeric_values)
-            max_val = max(numeric_values)
-            mean_val = sum(numeric_values) / len(numeric_values)
-            median_val = statistics.median(numeric_values)
+        if count > 0:
+            # Calculate median using SQL
+            if count % 2 == 1:
+                # Odd count: get middle value
+                offset = count // 2
+                cursor = conn.execute(f"""
+                    SELECT {quoted_col}
+                    FROM ({src_query})
+                    WHERE typeof({quoted_col}) IN ('integer', 'real')
+                    ORDER BY {quoted_col}
+                    LIMIT 1 OFFSET {offset}
+                """)
+                median_val = cursor.fetchone()[0]
+            else:
+                # Even count: average of two middle values
+                offset = count // 2 - 1
+                cursor = conn.execute(f"""
+                    SELECT {quoted_col}
+                    FROM ({src_query})
+                    WHERE typeof({quoted_col}) IN ('integer', 'real')
+                    ORDER BY {quoted_col}
+                    LIMIT 2 OFFSET {offset}
+                """)
+                vals = cursor.fetchall()
+                median_val = (vals[0][0] + vals[1][0]) / 2
             
             col_info["numeric"] = {
                 "min": min_val,
                 "max": max_val,
                 "mean": mean_val,
-                "median": median_val
+                "median": median_val,
+                "median_approx": False
             }
         else:
             col_info["numeric"] = None

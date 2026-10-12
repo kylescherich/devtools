@@ -136,7 +136,22 @@ def render_terminal(model):
             
             row_count_str = f"{obj['row_count']:,}" if obj['row_count'] is not None else "unknown"
             lines.append(f"Row count: {row_count_str}")
-            lines.append(f"Sampled: {obj['sampled']}")
+            
+            # Order information
+            order = obj.get('order', 'none')
+            if order == "rowid":
+                lines.append(f"Order: rowid")
+            elif order == "primary key":
+                lines.append(f"Order: primary key")
+            else:
+                lines.append(f"Order: none (rows unordered)")
+            
+            # Sampling information
+            if obj['sampled']:
+                max_rows = obj.get('rows_analyzed', 'unknown')
+                lines.append(f"Rows analyzed: {max_rows:,} of {row_count_str}")
+            else:
+                lines.append(f"Sampled: {obj['sampled']}")
             
             if obj.get('foreign_keys'):
                 lines.append("Foreign keys:")
@@ -181,15 +196,16 @@ def render_terminal(model):
                 # Distinct with proper labeling
                 if col['distinct_exact']:
                     distinct_str = f"{col['distinct']:,} (exact)"
-                elif col['distinct'] >= 100000:
-                    distinct_str = f"≥ 100,000 (estimated)"
                 else:
                     distinct_str = f"{col['distinct']:,} (estimated, sample)"
                 lines.append(f"    Distinct: {distinct_str}")
                 
                 if col['samples']:
                     samples_str = ', '.join(_escape_terminal(s) for s in col['samples'][:5])
-                    lines.append(f"    Samples: {samples_str}")
+                    if kind == "sqlite":
+                        lines.append(f"    Samples: {samples_str} (unordered)")
+                    else:
+                        lines.append(f"    Samples: {samples_str}")
                 
                 if col.get('numeric'):
                     num = col['numeric']
@@ -201,13 +217,11 @@ def render_terminal(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
-                            lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_str}")
+                            lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
-                        lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_str}")
+                        lines.append(f"    Numeric: {num['min']} / {num['max']} / {mean_r} / {median_r}")
                 
                 if col.get('dates'):
                     dates = col['dates']
@@ -313,7 +327,23 @@ def render_md(model):
             row_count_str = f"{obj['row_count']:,}" if obj['row_count'] is not None else "unknown"
             lines.append(f"**Row count:** {row_count_str}")
             lines.append("")
-            lines.append(f"**Sampled:** {obj['sampled']}")
+            
+            # Order information
+            order = obj.get('order', 'none')
+            if order == "rowid":
+                lines.append(f"**Order:** rowid")
+            elif order == "primary key":
+                lines.append(f"**Order:** primary key")
+            else:
+                lines.append(f"**Order:** none (rows unordered)")
+            lines.append("")
+            
+            # Sampling information
+            if obj['sampled']:
+                max_rows = obj.get('rows_analyzed', 'unknown')
+                lines.append(f"**Rows analyzed:** {max_rows:,} of {row_count_str}")
+            else:
+                lines.append(f"**Sampled:** {obj['sampled']}")
             lines.append("")
             
             if obj.get('foreign_keys'):
@@ -376,8 +406,6 @@ def render_md(model):
                 # Distinct with proper labeling
                 if col['distinct_exact']:
                     distinct_str = f"{col['distinct']:,} (exact)"
-                elif col['distinct'] >= 100000:
-                    distinct_str = f"≥ 100,000 (estimated)"
                 else:
                     distinct_str = f"{col['distinct']:,} (estimated, sample)"
                 row.append(distinct_str)
@@ -385,7 +413,10 @@ def render_md(model):
                 # Samples
                 if col['samples']:
                     samples_str = ', '.join(_escape_md_cell(s) for s in col['samples'][:5])
-                    row.append(samples_str)
+                    if kind == "sqlite":
+                        row.append(f"{samples_str} (unordered)")
+                    else:
+                        row.append(samples_str)
                 else:
                     row.append('')
                 
@@ -401,13 +432,11 @@ def render_md(model):
                         else:
                             mean_r = _round_sig(num['mean'])
                             median_r = _round_sig(num['median'])
-                            median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
-                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
+                            stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
-                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
+                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
                 
                 if col.get('dates'):
                     dates = col['dates']
@@ -530,7 +559,22 @@ def render_html(model):
             
             row_count_str = f"{obj['row_count']:,}" if obj['row_count'] is not None else "unknown"
             lines.append(f'<p><strong>Row count:</strong> {row_count_str}</p>')
-            lines.append(f'<p><strong>Sampled:</strong> {obj["sampled"]}</p>')
+            
+            # Order information
+            order = obj.get('order', 'none')
+            if order == "rowid":
+                lines.append(f'<p><strong>Order:</strong> rowid</p>')
+            elif order == "primary key":
+                lines.append(f'<p><strong>Order:</strong> primary key</p>')
+            else:
+                lines.append(f'<p><strong>Order:</strong> none (rows unordered)</p>')
+            
+            # Sampling information
+            if obj['sampled']:
+                max_rows = obj.get('rows_analyzed', 'unknown')
+                lines.append(f'<p><strong>Rows analyzed:</strong> {max_rows:,} of {row_count_str}</p>')
+            else:
+                lines.append(f'<p><strong>Sampled:</strong> {obj["sampled"]}</p>')
             
             if obj.get('foreign_keys'):
                 lines.append('<p><strong>Foreign keys:</strong></p>')
@@ -596,8 +640,6 @@ def render_html(model):
                 # Distinct with proper labeling
                 if col['distinct_exact']:
                     distinct_str = f"{col['distinct']:,} (exact)"
-                elif col['distinct'] >= 100000:
-                    distinct_str = f"≥ 100,000 (estimated)"
                 else:
                     distinct_str = f"{col['distinct']:,} (estimated, sample)"
                 lines.append(f'<td>{distinct_str}</td>')
@@ -605,7 +647,10 @@ def render_html(model):
                 # Samples
                 if col['samples']:
                     samples_html = ', '.join(_escape_html(s) for s in col['samples'][:5])
-                    lines.append(f'<td>{samples_html}</td>')
+                    if kind == "sqlite":
+                        lines.append(f'<td>{samples_html} (unordered)</td>')
+                    else:
+                        lines.append(f'<td>{samples_html}</td>')
                 else:
                     lines.append('<td></td>')
                 
@@ -626,8 +671,7 @@ def render_html(model):
                     else:
                         mean_r = _round_sig(num['mean'])
                         median_r = _round_sig(num['median'])
-                        median_str = f"{median_r} approx." if num.get('median_approx') else str(median_r)
-                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_str}")
+                        stats_parts.append(f"{num['min']} / {num['max']} / {mean_r} / {median_r}")
                 
                 if col.get('dates'):
                     dates = col['dates']

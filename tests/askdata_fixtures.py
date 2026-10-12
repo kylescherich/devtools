@@ -497,3 +497,53 @@ def headerless_csv(directory):
             f.write(f"{i},{i*10},{i*100}\n")
     
     return path
+
+
+def order_db(directory):
+    """Create a SQLite database to test row ordering.
+    
+    - Table r(id INTEGER PRIMARY KEY, v INTEGER) with ids 1..100 inserted in reverse, v = id
+    - Table w(k TEXT PRIMARY KEY, v INTEGER) WITHOUT ROWID with k "k000".."k099" inserted in reverse, v = number
+    - View rv AS SELECT v FROM r
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "order.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Table r with rowid
+    conn.execute("""
+        CREATE TABLE r (
+            id INTEGER PRIMARY KEY,
+            v INTEGER
+        )
+    """)
+    
+    # Insert in reverse order
+    for i in range(100, 0, -1):
+        conn.execute("INSERT INTO r (id, v) VALUES (?, ?)", (i, i))
+    
+    # Table w WITHOUT ROWID
+    conn.execute("""
+        CREATE TABLE w (
+            k TEXT PRIMARY KEY,
+            v INTEGER
+        ) WITHOUT ROWID
+    """)
+    
+    # Insert in reverse order
+    for i in range(99, -1, -1):
+        k = f"k{i:03d}"
+        conn.execute("INSERT INTO w (k, v) VALUES (?, ?)", (k, i))
+    
+    # View rv
+    conn.execute("CREATE VIEW rv AS SELECT v FROM r")
+    
+    conn.commit()
+    conn.close()
+    
+    return path

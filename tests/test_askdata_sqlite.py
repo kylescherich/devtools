@@ -706,5 +706,121 @@ class TestSQLiteInspect(unittest.TestCase):
             self.assertFalse(dangerous_path.exists())
 
 
+    def test_order_keys(self):
+        """Test that order keys are correctly determined."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from tests.askdata_fixtures import order_db
+            path = order_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            
+            # r has rowid
+            self.assertEqual(tables_by_name["r"]["order"], "rowid")
+            
+            # w is WITHOUT ROWID but has primary key
+            self.assertEqual(tables_by_name["w"]["order"], "primary key")
+            
+            # rv is a view with no rowid or pk
+            self.assertEqual(tables_by_name["rv"]["order"], "none")
+    
+    def test_order_affects_sampling(self):
+        """Test that ordering affects which rows are sampled."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from tests.askdata_fixtures import order_db
+            path = order_db(tmpdir)
+            result = inspect_sqlite(path, max_rows=10)
+            
+            self.assertIsNotNone(result)
+            
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            
+            # r is ordered by rowid, so first 10 rows should be id 1..10
+            r = tables_by_name["r"]
+            self.assertTrue(r["sampled"])
+            v_col = next(c for c in r["columns"] if c["name"] == "v")
+            self.assertIsNotNone(v_col["numeric"])
+            self.assertEqual(v_col["numeric"]["min"], 1)
+            self.assertEqual(v_col["numeric"]["max"], 10)
+            
+            # w is ordered by primary key k, so first 10 rows should be k000..k009 (v = 0..9)
+            w = tables_by_name["w"]
+            self.assertTrue(w["sampled"])
+            v_col = next(c for c in w["columns"] if c["name"] == "v")
+            self.assertIsNotNone(v_col["numeric"])
+            self.assertEqual(v_col["numeric"]["min"], 0)
+            self.assertEqual(v_col["numeric"]["max"], 9)
+    
+    def test_median_calculation(self):
+        """Test that median is calculated correctly in SQL."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            self.assertIsNotNone(result)
+            
+            tables_by_name = {t["name"]: t for t in result["tables"]}
+            orders = tables_by_name["orders"]
+            
+            amount_col = next(c for c in orders["columns"] if c["name"] == "amount")
+            self.assertIsNotNone(amount_col["numeric"])
+            
+            # Calculate expected median using statistics module
+            # We need to get all 300 amounts
+            import sqlite3
+            conn = sqlite3.connect(str(path))
+            cursor = conn.execute("SELECT amount FROM orders WHERE amount IS NOT NULL ORDER BY amount")
+            all_amounts = [row[0] for row in cursor.fetchall()]
+            conn.close()
+            
+            expected_median = statistics.median(all_amounts)
+            
+            # Check that our SQL-calculated median matches
+            self.assertEqual(amount_col["numeric"]["median"], expected_median)
+            self.assertFalse(amount_col["numeric"]["median_approx"])
+    
+    def test_order_in_terminal_report(self):
+        """Test that order and rows analyzed appear in terminal report."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from tests.askdata_fixtures import order_db
+            from askdata.report import render_terminal
+            
+            path = order_db(tmpdir)
+            result = inspect_sqlite(path, max_rows=10)
+            
+            output = render_terminal(result)
+            
+            self.assertIsNotNone(output)
+            self.assertIn("Order: none (rows unordered)", output)
+            self.assertIn("Rows analyzed: 10 of 100", output)
+    
+    def test_column_keys_complete_with_order(self):
+        """Test that every column still has exactly the required keys after adding order."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = fk_db(tmpdir)
+            result = inspect_sqlite(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result["tables"]), 0)
+            
+            required_keys = {
+                "name", "declared_type", "notnull", "pk", "type", "candidate",
+                "share", "missing", "distinct", "distinct_exact", "samples",
+                "numeric", "dates", "top"
+            }
+            
+            for table in result["tables"]:
+                for col in table["columns"]:
+                    col_keys = set(col.keys())
+                    self.assertEqual(
+                        col_keys, required_keys,
+                        f"Column {table['name']}.{col['name']} has wrong keys: {col_keys}"
+                    )
+
+
 if __name__ == '__main__':
     unittest.main()
