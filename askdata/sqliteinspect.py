@@ -363,7 +363,7 @@ def _analyze_column_stats(conn, src_query, col_name, sampled, obj_name, col_info
             col_info["share"] = round(max_share, 3)
             # Add warning
             percent = int(round(max_share * 100))
-            warnings.append(f"{obj_name}.{col_name} mixed: {percent}% {max_type}")
+            warnings.append(f"column {obj_name}.{col_name} mixed: {percent}% {max_type}")
         else:
             col_info["type"] = "text"
             col_info["candidate"] = None

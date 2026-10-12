@@ -2,6 +2,11 @@
 from pathlib import Path
 
 
+def _quote_sql_identifier(name):
+    """Quote a SQL identifier by doubling internal quotes."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def clean_csv(directory):
     """Create a clean CSV with 200 rows of various types.
     
@@ -229,19 +234,22 @@ def hostile_db(directory):
     table_name = 't"<script>'
     col_name = 'c"<b>'
     
-    conn.execute(f'CREATE TABLE "{table_name}" ("{col_name}" TEXT)')
+    quoted_table = _quote_sql_identifier(table_name)
+    quoted_col = _quote_sql_identifier(col_name)
+    
+    conn.execute(f'CREATE TABLE {quoted_table} ({quoted_col} TEXT)')
     
     # Insert hostile values
     conn.execute(
-        f'INSERT INTO "{table_name}" ("{col_name}") VALUES (?)',
+        f'INSERT INTO {quoted_table} ({quoted_col}) VALUES (?)',
         ('<img src=x onerror=alert(1)>',)
     )
     conn.execute(
-        f'INSERT INTO "{table_name}" ("{col_name}") VALUES (?)',
+        f'INSERT INTO {quoted_table} ({quoted_col}) VALUES (?)',
         ('normal value',)
     )
     conn.execute(
-        f'INSERT INTO "{table_name}" ("{col_name}") VALUES (?)',
+        f'INSERT INTO {quoted_table} ({quoted_col}) VALUES (?)',
         ('<script>alert("xss")</script>',)
     )
     
@@ -282,8 +290,8 @@ def mixed_db(directory, int_share):
     
     conn = sqlite3.connect(str(path))
     
-    # Create table with mixed column
-    conn.execute("CREATE TABLE m (v TEXT)")
+    # Create table with mixed column (no declared type)
+    conn.execute("CREATE TABLE m (v)")
     
     # Insert 100 rows
     num_rows = 100
