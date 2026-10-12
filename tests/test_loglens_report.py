@@ -440,6 +440,47 @@ class TestIncidents(ReportTestCase):
         self.assertTrue(err)
 
 
+class TestSyslogOrigin(ReportTestCase):
+    def test_syslog_hosts_merge_into_one_group(self):
+        lines = ["Mar  1 10:00:00 web1 nginx[123]: ERROR upstream timed out",
+                 "Mar  1 10:00:05 web2 nginx[456]: ERROR upstream timed out",
+                 "Mar  1 10:00:09 web2 nginx: ERROR upstream timed out"]
+        lines += [f"Mar  1 10:01:0{i} db{i} postgres[9{i}]: WARN slow query"
+                  for i in (4, 1, 3, 2)]
+        lines.append("Mar  1 10:02:00 myhost ERROR: not a header")
+        path = fx.write_lines(self.dir, "syslog", lines)
+        result = read_logs([path], year=2026)
+        first = result.entries[0]
+        self.assertEqual((first.host, first.app, first.message),
+                         ("web1", "nginx", "ERROR upstream timed out"))
+        self.assertEqual((result.entries[-1].host, result.entries[-1].message),
+                         (None, "myhost ERROR: not a header"))
+        groups = {g.signature: g for g in analyse(result).groups}
+        upstream = groups["ERROR upstream timed out"]
+        self.assertEqual(upstream.count, 3)
+        self.assertEqual((upstream.hosts, upstream.apps), ({"web1", "web2"}, {"nginx"}))
+        self.assertEqual(groups["WARN slow query"].count, 4)
+        self.assertEqual(len([s for s in groups if "upstream" in s]), 1)
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--year", "2026", "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                incident = out[out.lower().index("incident view"):]
+                self.assertIn("hosts: 2 (web1, web2)  apps: 1 (nginx)", incident)
+                self.assertIn("hosts: 4 (db1, db2, db3)  apps: 1 (postgres)", incident)
+                self.assertNotIn("db4", out)
+                self.assertNotIn("web1 nginx", out)
+
+    def test_syslog_origin_names_redacted(self):
+        path = fx.write_lines(self.dir, "syslog", [
+            "Mar  1 10:00:00 token=SNThostTok app: ERROR boom"])
+        for fmt in FORMATS:
+            _, out, _ = run([path, "--year", "2026", "--format", fmt])
+            self.assertTrue(out.strip(), "report is empty")
+            self.assertIn("hosts: 1 (token=", out)
+            self.assertNotIn("SNThostTok", out)
+
+
 class TestHeaderAndSummary(ReportTestCase):
     def test_header_fields_and_summary(self):
         log = fx.write_lines(self.dir, "a.log", [

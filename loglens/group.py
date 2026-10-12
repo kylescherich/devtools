@@ -8,6 +8,7 @@ from loglens.redact import redact, redact_lines
 
 MAX_EXAMPLES = 2
 MAX_EXAMPLE_LINES = 20
+MAX_ORIGIN_NAMES = 3
 
 _URL = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 _EMAIL = re.compile(r"\b[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b")
@@ -80,7 +81,13 @@ class Group:
     last_ts: object = None
     files: list = field(default_factory=list)
     first_index: int = 0          # position of the first entry in the input order
+    hosts: set = field(default_factory=set)        # syslog hosts, as read
+    apps: set = field(default_factory=set)         # syslog apps, as read
     examples: list = field(default_factory=list)   # redacted; rendered only with --raw
+
+    def origin_names(self, names):
+        """Up to MAX_ORIGIN_NAMES of names, redacted and sorted."""
+        return sorted({redact(name) for name in names})[:MAX_ORIGIN_NAMES]
 
 
 def _redacted_signature(entry):
@@ -112,6 +119,10 @@ def group_entries(entries, *, keep_examples=False):
                 group.last_ts = entry.ts
         if entry.file not in group.files:
             group.files.append(entry.file)
+        if entry.host is not None:
+            group.hosts.add(entry.host)
+        if entry.app is not None:
+            group.apps.add(entry.app)
         if keep_examples and len(group.examples) < MAX_EXAMPLES:
             lines = [message, *continuation][:MAX_EXAMPLE_LINES]
             group.examples.append(redact("\n".join(lines)))

@@ -206,6 +206,14 @@ def _warning_lines(tl):
             "groups but left off the timeline"]
 
 
+def _origin(group):
+    """'hosts: 2 (web1, web2)  apps: 1 (nginx)' for syslog groups, else None."""
+    if not group.hosts and not group.apps:
+        return None
+    return "  ".join(f"{label}: {len(names)} ({', '.join(group.origin_names(names))})"
+                     for label, names in (("hosts", group.hosts), ("apps", group.apps)))
+
+
 def _size(size):
     return "?" if size is None else f"{size} bytes"
 
@@ -254,6 +262,8 @@ def _render_text(rep):
         out.append(f"{n}. {e(g.level)} x{g.count}  {e(g.signature)}")
         out.append(f"   first {_ts(g.first_ts)}  last {_ts(g.last_ts)}")
         out.append(f"   files: {e(', '.join(g.files))}")
+        if _origin(g):
+            out.append(f"   {e(_origin(g))}")
         for label, items in (("before", inc.before), ("after", inc.after)):
             if rep.context <= 0:
                 continue
@@ -328,6 +338,8 @@ def _render_md(rep):
         out.append(f"{n}. {e(g.level)} x{g.count}: {e(g.signature)}")
         out.append(f"    - first {_ts(g.first_ts)}, last {_ts(g.last_ts)}")
         out.append(f"    - files: {e(', '.join(g.files))}")
+        if _origin(g):
+            out.append(f"    - {e(_origin(g))}")
         for label, items in (("before", inc.before), ("after", inc.after)):
             if rep.context <= 0:
                 continue
@@ -447,6 +459,8 @@ def _render_html(rep):
         out.append(f"<li><p>{e(g.level)} x{g.count}: <code>{e(g.signature)}</code></p>")
         out.append(f"<p>first {_ts(g.first_ts)}, last {_ts(g.last_ts)}; "
                    f"files: {e(', '.join(g.files))}</p>")
+        if _origin(g):
+            out.append(f"<p>{e(_origin(g))}</p>")
         for label, items in (("before", inc.before), ("after", inc.after)):
             if rep.context <= 0:
                 continue

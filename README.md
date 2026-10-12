@@ -87,6 +87,11 @@ redaction on), a one-sentence summary, warnings, the groups table, the timeline,
 spikes, the incident view (the top 5 WARNING+ groups by count; INFO and
 DEBUG groups appear only in the groups table) and, only with `--raw`,
 examples.
+Syslog lines: a `host app[pid]:` or `host app:` header right after the
+timestamp is taken out of the message before grouping, so the same error from
+several hosts is one group; the incident view lists each group's hosts and
+apps (count and up to 3 names, e.g. `hosts: 2 (web1, web2)  apps: 1 (nginx)`).
+
 Timeline bounds: `--bucket auto` picks the smallest size giving at most 200
 buckets; an explicit `--bucket` giving more than 2,000 buckets is refused with
 exit 2 and the message names the smallest size that fits. Entries more than
