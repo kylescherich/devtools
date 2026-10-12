@@ -43,3 +43,10 @@ Run from the repo root:
 - Never print values by default; example values appear only with `--values`.
 - Never compare arrays by position without saying so; unkeyed arrays carry the note "array elements compared by merged shape, not position".
 - Tests that check privacy or leaks assert non-empty output first (DEC-071).
+
+## Log Lens rules
+- Default output never contains a raw log line; raw examples only with `--raw`.
+- One function `loglens.redact.redact(text) -> str` runs on EVERYTHING printed or written; no flag, env var or parameter can skip it.
+- No tailing, follow mode, watching or daemon. No network, no subprocess, never follow symlinks.
+- Standard library only; must run on Python 3.11 and 3.12. Test data is synthetic, generated at test time into temp dirs (`tests/loglens_fixtures.py`).
+- Commit messages and source files are pure ASCII; before every commit run both `python3 -m unittest discover` and `uv run --no-project --python 3.11 python -m unittest discover` and commit only if both print OK.

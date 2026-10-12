@@ -52,3 +52,68 @@ The report includes:
 ## Limits
 
 Static analysis only. Test targets are statically inferred. Dynamic and optional imports are listed, not guessed.
+
+# loglens
+
+Summarises text and JSONL log files (optionally gzipped) into grouped,
+redacted findings: which errors and warnings happened, how often, when, and
+where they spiked. Standard library only; Python 3.11 and 3.12.
+
+## Usage
+
+```bash
+loglens FILE [FILE ...] [--format text|md|html] [--output PATH [--force]]
+        [--bucket auto|1m|5m|15m|1h|6h|1d] [--context N] [--raw]
+        [--input-format auto|text|jsonl] [--year YYYY] [--field NAME=KEY]
+        [--max-bytes N] [--max-lines N]
+```
+
+Examples (synthetic file names):
+
+```bash
+loglens app.log                                  # text report on stdout
+loglens app.log worker.log.gz events.jsonl       # merged into one timeline
+loglens app.log --format html --output ~/reports/app.html
+loglens syslog.1 --year 2026 --bucket 15m --format md
+loglens app.log --context 3                      # neighbours of each incident
+loglens app.log --context 3 --raw                # plus redacted raw messages
+loglens export.log --input-format jsonl --field message=text --field ts=when
+```
+
+Every report has the same sections in all three formats: a header (files and
+sizes, lines read, entries, untimed entries, invalid JSONL lines, replaced
+non-UTF-8 bytes, sampling, syslog year, bucket size, raw lines on/off,
+redaction on), a one-sentence summary, the groups table, the timeline,
+spikes, the incident view (top 5 groups) and, only with `--raw`, examples.
+Reports are reproducible: the same inputs and arguments (including `--year`)
+give byte-identical output; the current date or time never appears.
+
+## Privacy defaults
+
+- No raw log line is printed unless you pass `--raw`. The default report shows
+  signatures: messages with numbers, IDs, IPs, paths, URLs, e-mails and quoted
+  strings replaced by placeholders such as `<n>` and `<path>`.
+- Everything printed or written passes through one redaction function, with no
+  way to turn it off: bearer/Authorization values, password/secret/token/API-key
+  values, GitHub/`sk-`/AWS keys, JWTs, PEM blocks and 16-digit card numbers
+  become `<redacted>`, also under `--raw`.
+- Control characters and bidi overrides in log text are shown as `\xNN` /
+  `\uXXXX`; Markdown and HTML are escaped; the HTML report has no scripts,
+  links or event handlers.
+- Inputs are only read: never through a symlink, and never written.
+  `--output` refuses an existing file (unless `--force`), any symlink, and the
+  directory of any input file (so `loglens app.log --output report.txt` run
+  next to `app.log` is refused; write elsewhere). No network, no subprocess,
+  no tailing.
+
+## Exit codes
+
+When several apply, the leftmost wins: 2 > 3 > 4 > 1 > 0.
+
+| code | meaning |
+| --- | --- |
+| 0 | no entries at WARNING or above |
+| 1 | WARNING entries, none at ERROR or above |
+| 2 | usage error, including a refused `--output` |
+| 3 | input missing, unreadable, invalid, a symlink, or over `--max-bytes` |
+| 4 | entries at ERROR or above (ERROR, ERR, CRITICAL, FATAL, ALERT, EMERG) |
