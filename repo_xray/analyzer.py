@@ -157,7 +157,10 @@ def _parse_file(root_path, rel_path, module_name, model):
         elif isinstance(node, ast.FunctionDef) or isinstance(node, ast.AsyncFunctionDef):
             func_info = _extract_function(node)
             module_info["functions"].append(func_info)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+    
+    # Collect all imports from anywhere in the file (not just top-level)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
             _extract_raw_imports(node, module_name, package, model, module_info)
     
     model["modules"][module_name] = module_info

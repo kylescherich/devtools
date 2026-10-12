@@ -249,5 +249,49 @@ class TestAnalyzer(unittest.TestCase):
             self.assertIn("b.x", result["modules"])
 
 
+    def test_imports_in_functions_and_classes(self):
+        """Test that imports inside functions and classes are captured."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create pkg/__init__.py
+            pkg_dir = tmp_path / 'pkg'
+            pkg_dir.mkdir()
+            (pkg_dir / '__init__.py').write_text('')
+            
+            # Create pkg/a.py
+            (pkg_dir / 'a.py').write_text('def helper(): pass\n')
+            
+            # Create pkg/b.py with imports inside function and class
+            (pkg_dir / 'b.py').write_text(
+                'def f():\n'
+                '    from . import a\n'
+                'class C:\n'
+                '    def m(self):\n'
+                '        import pkg.a\n'
+            )
+            
+            result = analyze(tmp_path)
+            
+            # Assert result is non-empty
+            self.assertTrue(result)
+            self.assertGreater(result["files_scanned"], 0)
+            
+            # Check that pkg.b has an internal import of pkg.a
+            self.assertIn("pkg.b", result["modules"])
+            pkg_b = result["modules"]["pkg.b"]
+            
+            # Find the import with lineno 2
+            found_import = None
+            for imp in pkg_b["imports"]:
+                if imp["lineno"] == 2:
+                    found_import = imp
+                    break
+            
+            self.assertIsNotNone(found_import)
+            self.assertEqual(found_import["target"], "pkg.a")
+            self.assertTrue(found_import["internal"])
+
+
 if __name__ == '__main__':
     unittest.main()
