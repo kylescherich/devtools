@@ -1,6 +1,6 @@
 """Differ: compare two shapes path by path.
 
-Changes flagged breaking are candidates for review ("potentially breaking —
+Changes flagged breaking are candidates for review ("potentially breaking -
 review"), not a verdict that something will break.
 """
 from jsondiff.shape import DEPTH_MARK, UsageError, parse_keys
@@ -17,7 +17,7 @@ ARRAY_ELEMENTS_CHANGED = "array element shape changed"
 CATEGORIES = (ADDED, REMOVED, TYPE_CHANGED, BECAME_NULLABLE, NO_LONGER_NULLABLE,
               BECAME_OPTIONAL, NO_LONGER_OPTIONAL, ARRAY_ELEMENTS_CHANGED)
 BREAKING = frozenset({REMOVED, TYPE_CHANGED, BECAME_OPTIONAL, BECAME_NULLABLE})
-BREAKING_LABEL = "potentially breaking — review"
+BREAKING_LABEL = "potentially breaking \u2014 review"
 UNKEYED_NOTE = "array elements compared by merged shape, not position"
 ALWAYS_EMPTY_NEW = "array always empty in new file"
 
@@ -42,7 +42,7 @@ def _compare(path, old, new):
     new_types = [t for t in new["types"] if t != "null"]
     if old_types != new_types:
         changes.append(_change(path, TYPE_CHANGED,
-                               f"{_type_list(old)} → {_type_list(new)}"))
+                               f"{_type_list(old)} \u2192 {_type_list(new)}"))
     if not old["nullable"] and new["nullable"]:
         changes.append(_change(path, BECAME_NULLABLE, "null values now seen"))
     elif old["nullable"] and not new["nullable"]:
@@ -134,6 +134,12 @@ def _match_keyed(array_path, old_keyed, new_keyed):
     }
 
 
+def _input_meta(shape):
+    return {"file": shape.get("file", ""), "kind": shape["kind"],
+            "records": shape["records"], "sampled": shape["sampled"],
+            "invalid_lines": shape["invalid_lines"]}
+
+
 def diff_shapes(old, new, keys=None, keyed_inputs=None):
     """Compare two shape models; see the module docstring for wording."""
     keys = parse_keys(keys)
@@ -165,6 +171,11 @@ def diff_shapes(old, new, keys=None, keyed_inputs=None):
         else:
             changes.extend(_compare(path, old_paths[path], new_paths[path]))
     changes.extend(_array_summaries(changes))
+    values = bool(old.get("values") and new.get("values"))
+    if values:
+        for change in changes:
+            change["old_values"] = old_paths.get(change["path"], {}).get("values", [])
+            change["new_values"] = new_paths.get(change["path"], {}).get("values", [])
     order = {c: i for i, c in enumerate(CATEGORIES)}
     changes.sort(key=lambda c: (c["path"], order[c["category"]]))
 
@@ -186,6 +197,8 @@ def diff_shapes(old, new, keys=None, keyed_inputs=None):
     notes = [UNKEYED_NOTE] if unkeyed else []
 
     return {
+        "inputs": {"old": _input_meta(old), "new": _input_meta(new)},
+        "values": values,
         "changes": changes,
         "unchanged": len(unchanged),
         "unchanged_paths": unchanged,

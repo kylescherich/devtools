@@ -14,7 +14,7 @@ DEFAULT_MAX_RECORDS = 1_000_000
 DEFAULT_MAX_DEPTH = 64
 
 ROOT = "$"
-DEPTH_MARK = "…(depth limit)"
+DEPTH_MARK = "\u2026(depth limit)"
 JSONL_SUFFIXES = (".jsonl", ".ndjson")
 MAX_VALUES = 3
 MAX_VALUE_CHARS = 80
@@ -95,7 +95,7 @@ def json_type(value):
 def _example(value):
     text = json.dumps(value)
     if len(text) > MAX_VALUE_CHARS:
-        text = text[:MAX_VALUE_CHARS - 1] + "…"
+        text = text[:MAX_VALUE_CHARS - 1] + "\u2026"
     return text
 
 
@@ -327,7 +327,9 @@ def build_shape(path, *, jsonl=None, max_bytes=DEFAULT_MAX_BYTES,
         raise UsageError("--key applies to single JSON documents, not JSONL")
     builder = _Builder(max_depth, values, keys)
     model = {
+        "file": os.path.basename(os.fspath(path)),
         "kind": "jsonl" if is_jsonl else "json",
+        "values": bool(values),
         "records": 0,
         "sampled": False,
         "invalid_lines": {"count": 0, "first": []},

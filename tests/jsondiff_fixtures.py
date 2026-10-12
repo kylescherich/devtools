@@ -3,8 +3,8 @@ directory it is given (a temp dir) and returns the path of the file."""
 import json
 from pathlib import Path
 
-HOSTILE_KEYS = ["a.b", 'say "hi"', "café", "<script>",
-                '"><img onerror=x>', "rtl‮override", "esc\x1bkey"]
+HOSTILE_KEYS = ["a.b", 'say "hi"', "caf\u00e9", "<script>",
+                '"><img onerror=x>', "rtl\u202eoverride", "esc\x1bkey"]
 
 
 def write_text(directory, name, text):
@@ -102,3 +102,28 @@ def secret_values(directory):
 def keyed_orders(directory, name, orders_list):
     """A document whose `orders` array is keyed by `id`."""
     return write_json(directory, name, {"orders": orders_list})
+
+
+SENTINELS = ("SENTINEL-ALPHA-7731", "user1@example.com", "4111111111111111")
+
+
+def privacy_pair(directory):
+    """Old/new documents whose CHANGED paths carry sentinel values."""
+    old = write_json(directory, "people-old.json", {"user": {
+        "token": "SENTINEL-ALPHA-7731", "email": "user1@example.com",
+        "card": 4111111111111111, "id": 1}})
+    new = write_json(directory, "people-new.json", {"user": {
+        "token": 7731, "email": None, "card": "4111111111111111-x", "id": 1,
+        "extra": "SENTINEL-ALPHA-7731"}})
+    return old, new
+
+
+HOSTILE_NAME = 'in\x1b[31m\u202e"><img onerror=x><script>.json'
+
+
+def hostile_pair(directory):
+    """Old/new with hostile keys (changed type) and a hostile file name."""
+    keys = ["<script>", '"><img onerror=x>', "a|b`c", "rtl\u202e", "esc\x1b"]
+    old = write_json(directory, HOSTILE_NAME, [{"id": 1, **{k: 1 for k in keys}}])
+    new = write_json(directory, "new.json", [{"id": 1, **{k: "x" for k in keys}}])
+    return old, new

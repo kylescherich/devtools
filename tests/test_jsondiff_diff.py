@@ -55,7 +55,7 @@ class TestCategories(DiffTestCase):
     def test_type_changed(self):
         result = self.diff({"a": 1}, {"a": "1"})
         changed = self.only(result, "type changed")
-        self.assertEqual(changed["a"]["detail"], "integer → string")
+        self.assertEqual(changed["a"]["detail"], "integer \u2192 string")
         self.assertTrue(changed["a"]["breaking"])
 
     def test_integer_to_number_is_a_type_change(self):
@@ -64,7 +64,7 @@ class TestCategories(DiffTestCase):
         result = diff_shapes(build_shape(old), build_shape(new))
         self.assertTrue(result["changes"])
         self.assertEqual(self.only(result, "type changed")["a"]["detail"],
-                         "integer → number")
+                         "integer \u2192 number")
 
     def test_null_is_not_a_type_change(self):
         result = self.diff([{"a": 1}], [{"a": 1}, {"a": None}], jsonl=True)

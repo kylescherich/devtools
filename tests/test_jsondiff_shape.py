@@ -99,10 +99,10 @@ class TestKeyEscaping(ShapeTestCase):
         expected = {
             "a.b": '["a.b"]',
             'say "hi"': '["say \\"hi\\""]',
-            "café": '["caf\\u00e9"]',
+            "caf\u00e9": '["caf\\u00e9"]',
             "<script>": '["<script>"]',
             '"><img onerror=x>': '["\\"><img onerror=x>"]',
-            "rtl‮override": '["rtl\\u202eoverride"]',
+            "rtl\u202eoverride": '["rtl\\u202eoverride"]',
             "esc\x1bkey": '["esc\\u001bkey"]',
         }
         for raw, top in expected.items():
@@ -113,7 +113,7 @@ class TestKeyEscaping(ShapeTestCase):
             self.assertEqual(paths[nested]["key"], raw)
             self.assertEqual(paths[nested]["parent"], top)
         for path in paths:
-            self.assertNotIn("‮", path)
+            self.assertNotIn("\u202e", path)
             self.assertNotIn("\x1b", path)
 
     def test_dotted_key_under_identifier(self):
@@ -146,11 +146,11 @@ class TestWarningsAndGuards(ShapeTestCase):
     def test_depth_limit_entry(self):
         model = self.shape(fx.deep(self.dir, 10), max_depth=3)
         paths = model["paths"]
-        self.assertIn("d.d.d…(depth limit)", paths)
+        self.assertIn("d.d.d\u2026(depth limit)", paths)
         self.assertIn("d.d.d", paths)
         self.assertNotIn("d.d.d.d", paths)
         self.assertEqual([p for p in paths if "depth limit" in p],
-                         ["d.d.d…(depth limit)"])
+                         ["d.d.d\u2026(depth limit)"])
         self.assertTrue(model["warnings"])
         self.assertIn("depth limit", " ".join(model["warnings"]))
 
