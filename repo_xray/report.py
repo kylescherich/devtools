@@ -5,6 +5,9 @@ import re
 from collections import defaultdict
 
 
+DETECTED_FORMS = 'Detected forms: if __name__ == "__main__" blocks, and [project.scripts] console scripts in the root pyproject.toml.'
+
+
 def _escape_markdown(s):
     """Escape special characters for Markdown."""
     s = s.replace('&', '&amp;')
@@ -348,7 +351,7 @@ def render_markdown(model, title, docstrings=True):
     # Entry points
     lines.append("## Entry points")
     lines.append("")
-    lines.append(_escape_markdown('Detected forms: if __name__ == "__main__" blocks, and [project.scripts] console scripts in the root pyproject.toml.'))
+    lines.append(_escape_markdown(DETECTED_FORMS))
     lines.append("")
     entry_points = model.get('entry_points', [])
     if entry_points:
@@ -546,7 +549,7 @@ def render_html(model, title, docstrings=True):
     
     # Entry points
     lines.append('<h2>Entry points</h2>')
-    lines.append(f'<p>{_escape_html("Detected forms: if __name__ == \"__main__\" blocks, and [project.scripts] console scripts in the root pyproject.toml.")}</p>')
+    lines.append(f'<p>{_escape_html(DETECTED_FORMS)}</p>')
     entry_points = model.get('entry_points', [])
     if entry_points:
         sorted_eps = sorted(entry_points, key=lambda ep: (ep['kind'], ep['module'], ep['name']))
