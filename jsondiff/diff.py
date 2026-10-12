@@ -36,6 +36,15 @@ def _type_list(entry):
     return "null only"
 
 
+def _added_detail(entry):
+    """Types, then presence when the path is missing from some parents."""
+    detail = _type_list(entry)
+    if entry["present"] < entry["parents"]:
+        detail += (f", present in {entry['present']} of {entry['parents']} "
+                   f"({entry['presence']:.0%})")
+    return detail
+
+
 def _compare(path, old, new):
     changes = []
     old_types = [t for t in old["types"] if t != "null"]
@@ -156,7 +165,7 @@ def diff_shapes(old, new, keys=None, keyed_inputs=None):
     changes = []
     for path in sorted(old_paths.keys() | new_paths.keys()):
         if path not in old_paths:
-            changes.append(_change(path, ADDED, _type_list(new_paths[path])))
+            changes.append(_change(path, ADDED, _added_detail(new_paths[path])))
         elif path not in new_paths:
             detail = (ALWAYS_EMPTY_NEW if _always_empty_in(new_paths, path)
                       else _type_list(old_paths[path]))
@@ -166,7 +175,7 @@ def diff_shapes(old, new, keys=None, keyed_inputs=None):
         elif old_paths[path].get("empty_array") != new_paths[path].get("empty_array"):
             # Empty is not a type: elements appearing are added, vanishing removed.
             if old_paths[path].get("empty_array"):
-                changes.append(_change(path, ADDED, _type_list(new_paths[path])))
+                changes.append(_change(path, ADDED, _added_detail(new_paths[path])))
             else:
                 changes.append(_change(path, REMOVED, ALWAYS_EMPTY_NEW))
         else:

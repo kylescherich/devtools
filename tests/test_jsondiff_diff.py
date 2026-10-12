@@ -45,6 +45,21 @@ class TestCategories(DiffTestCase):
         added = self.only(result, "added")
         self.assertEqual(list(added), ["b"])
         self.assertFalse(added["b"]["breaking"])
+        self.assertEqual(added["b"]["detail"], "string")
+
+    def test_added_in_some_array_elements_reports_presence(self):
+        result = self.diff({"items": [{"a": 1}, {"a": 2}, {"a": 3}]},
+                           {"items": [{"a": 1, "b": True}, {"a": 2}, {"a": 3}]})
+        added = self.only(result, "added")
+        self.assertEqual(added["items[].b"]["detail"],
+                         "boolean, present in 1 of 3 (33%)")
+
+    def test_added_in_some_jsonl_records_reports_presence(self):
+        old = [{"a": i} for i in range(10)]
+        new = [{"a": i, "b": "x"} if i < 5 else {"a": i} for i in range(10)]
+        result = self.diff(old, new, jsonl=True)
+        added = self.only(result, "added")
+        self.assertEqual(added["b"]["detail"], "string, present in 5 of 10 (50%)")
 
     def test_removed(self):
         result = self.diff({"a": 1, "b": "x"}, {"a": 1})
