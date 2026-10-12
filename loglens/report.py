@@ -2,8 +2,10 @@
 
 All three formats render the same sections from one Report. Every dynamic
 string passes the format's escape step (control characters as \\xNN, bidi
-controls as \\uXXXX; Markdown and HTML escape their own syntax on top). The
-CLI then sends the whole document through redact() on the way out.
+controls as \\uXXXX; Markdown and HTML escape their own syntax on top). In
+text and Markdown a literal backslash is doubled first, so a typed "\\x1b"
+shows as "\\\\x1b" and only a real control shows as "\\x1b". The CLI then
+sends the whole document through redact() on the way out.
 
 Values that can contain redacted text are placed last on their line, quoted,
 or (in HTML) followed by a newline: the final redact() pass leaves a label
@@ -37,19 +39,31 @@ def _escape_char(match):
     return f"\\x{code:02x}" if code <= 0xff else f"\\u{code:04x}"
 
 
-def escape_text(value):
+def _escape_controls(value):
     """Control characters -> \\xNN, bidi and line-separator characters -> \\uXXXX."""
     return _UNSAFE.sub(_escape_char, str(value))
 
 
+def _double_backslashes(value):
+    return str(value).replace("\\", "\\\\")
+
+
+def escape_text(value):
+    """Backslashes doubled, then controls escaped: the two never look alike."""
+    return _escape_controls(_double_backslashes(value))
+
+
 def escape_md(value):
-    return escape_text(html.escape(_MD_SPECIAL.sub(r"\\\1", str(value)), quote=False))
+    """Backslashes doubled before Markdown escaping, so they render doubled."""
+    escaped = _MD_SPECIAL.sub(r"\\\1", _double_backslashes(value))
+    return _escape_controls(html.escape(escaped, quote=False))
 
 
 def escape_html(value):
     # Values only ever land in text nodes, never in attributes, so quotes stay
-    # literal; that also lets the final redact() pass stop at them.
-    return html.escape(escape_text(value), quote=False)
+    # literal; that also lets the final redact() pass stop at them. Backslashes
+    # stay single: HTML has no backslash escapes to confuse them with.
+    return html.escape(_escape_controls(value), quote=False)
 
 
 def _ts(value):

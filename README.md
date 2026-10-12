@@ -109,7 +109,9 @@ give byte-identical output; the current date or time never appears.
   values, GitHub/`sk-`/AWS keys, JWTs, PEM blocks and 16-digit card numbers
   become `<redacted>`, also under `--raw`.
 - Control characters and bidi overrides in log text are shown as `\xNN` /
-  `\uXXXX`; Markdown and HTML are escaped; the HTML report has no scripts,
+  `\uXXXX`; in text and Markdown a literal backslash from the log is shown
+  doubled (`\\`), so a typed `\x1b` reads `\\x1b` and only a real control
+  reads `\x1b`; Markdown and HTML are escaped; the HTML report has no scripts,
   links or event handlers.
 - Inputs are only read: never through a symlink, and never written.
   `--output` refuses an existing file (unless `--force`), any symlink, and the

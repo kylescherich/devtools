@@ -134,6 +134,29 @@ class TestEscaping(ReportTestCase):
                     if extra:
                         self.assertIn("alert(1)", out)
 
+    def test_backslash_unambiguous(self):
+        # one line: a typed backslash-x1b, then a real ESC
+        path = fx.write_lines(self.dir, "app.log",
+                              [f"{iso(T0)} ERROR lit \\x1b real \x1b end"])
+        self.assertIn(b"lit \\x1b real \x1b end", path.read_bytes())
+        # (format, --raw example, default signature); md escapes the doubled
+        # pair once more, so it renders as two backslashes.
+        cases = (("text", r"lit \\x1b real \x1b end", r"lit \\x<n>b real \x1b end"),
+                 ("md", r"lit \\\\x1b real \x1b end",
+                  r"lit \\\\x&lt;n&gt;b real \x1b end"))
+        for fmt, example, signature in cases:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt, "--raw"])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertNotIn("\x1b", out)                  # no real ESC
+                self.assertIn(example, out)
+                _, out, _ = run([path, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertIn(signature, out)
+        _, out, _ = run([path, "--format", "html", "--raw"])
+        self.assertTrue(out.strip(), "report is empty")
+        self.assertIn(r"lit \x1b real \x1b end", out)        # HTML unchanged
+
     def test_md_table_row_stays_one_row(self):
         path = fx.write_lines(self.dir, "app.log", [f"{iso(T0)} ERROR x | y | z"])
         _, out, _ = run([path, "--format", "md"])
