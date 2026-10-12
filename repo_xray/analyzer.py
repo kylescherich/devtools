@@ -139,6 +139,15 @@ def _parse_file(root_path, rel_path, module_name, model):
         })
         return
     
+    # Build set of import nodes inside try blocks
+    try_import_nodes = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Try, ast.TryStar if hasattr(ast, 'TryStar') else ast.Try)):
+            # Check body, handlers, and orelse
+            for child in ast.walk(node):
+                if child is not node and isinstance(child, (ast.Import, ast.ImportFrom)):
+                    try_import_nodes.add(child)
+    
     # Determine if this is a package
     is_package = rel_path.name == '__init__.py'
     
@@ -201,7 +210,8 @@ def _parse_file(root_path, rel_path, module_name, model):
     # Collect all imports from anywhere in the file (not just top-level)
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
-            _extract_raw_imports(node, module_name, package, model, module_info)
+            in_try = node in try_import_nodes
+            _extract_raw_imports(node, module_name, package, model, module_info, in_try)
     
     model["modules"][module_name] = module_info
 
@@ -291,7 +301,7 @@ def _get_attribute_name(node):
     return ""
 
 
-def _extract_raw_imports(node, module_name, package, model, module_info):
+def _extract_raw_imports(node, module_name, package, model, module_info, in_try):
     """Extract raw import information from an import node (pass 2)."""
     if isinstance(node, ast.Import):
         for alias in node.names:
@@ -299,7 +309,8 @@ def _extract_raw_imports(node, module_name, package, model, module_info):
             module_info["raw_imports"].append({
                 "kind": "import",
                 "name": alias.name,
-                "lineno": node.lineno
+                "lineno": node.lineno,
+                "in_try": in_try
             })
     elif isinstance(node, ast.ImportFrom):
         if node.module is None and node.level > 0:
@@ -348,7 +359,8 @@ def _extract_raw_imports(node, module_name, package, model, module_info):
                     "kind": "from",
                     "base": base_module,
                     "name": alias.name,
-                    "lineno": node.lineno
+                    "lineno": node.lineno,
+                    "in_try": in_try
                 })
 
 
@@ -378,6 +390,7 @@ def _resolve_imports_pass3(model):
     """Resolve raw imports to targets (pass 3, after all modules are known)."""
     for module_name, module_info in model["modules"].items():
         imports = []
+        try_imports = []
         
         for raw_import in module_info["raw_imports"]:
             if raw_import["kind"] == "import":
@@ -395,12 +408,18 @@ def _resolve_imports_pass3(model):
                 if target is None:
                     target = name
                 
-                internal = target in model["modules"]
-                imports.append({
-                    "target": target,
-                    "internal": internal,
-                    "lineno": raw_import["lineno"]
-                })
+                if raw_import["in_try"]:
+                    try_imports.append({
+                        "detail": target,
+                        "lineno": raw_import["lineno"]
+                    })
+                else:
+                    internal = target in model["modules"]
+                    imports.append({
+                        "target": target,
+                        "internal": internal,
+                        "lineno": raw_import["lineno"]
+                    })
             
             elif raw_import["kind"] == "from":
                 # from X import a - check if X.a is a module, else use X
@@ -413,14 +432,20 @@ def _resolve_imports_pass3(model):
                 else:
                     target = base
                 
-                internal = target in model["modules"]
-                imports.append({
-                    "target": target,
-                    "internal": internal,
-                    "lineno": raw_import["lineno"]
-                })
+                if raw_import["in_try"]:
+                    try_imports.append({
+                        "detail": target,
+                        "lineno": raw_import["lineno"]
+                    })
+                else:
+                    internal = target in model["modules"]
+                    imports.append({
+                        "target": target,
+                        "internal": internal,
+                        "lineno": raw_import["lineno"]
+                    })
         
-        # Deduplicate by (target, lineno) to get one entry per distinct target per statement
+        # Deduplicate imports by (target, lineno)
         seen = set()
         unique_imports = []
         for imp in imports:
@@ -430,6 +455,20 @@ def _resolve_imports_pass3(model):
                 unique_imports.append(imp)
         
         module_info["imports"] = unique_imports
+        
+        # Deduplicate try imports by (detail, lineno) and add to model["unresolved"]
+        seen_try = set()
+        for try_imp in try_imports:
+            key = (try_imp["detail"], try_imp["lineno"])
+            if key not in seen_try:
+                seen_try.add(key)
+                model["unresolved"].append({
+                    "module": module_name,
+                    "kind": "try",
+                    "detail": try_imp["detail"],
+                    "lineno": try_imp["lineno"]
+                })
+        
         del module_info["raw_imports"]
 
 
@@ -485,9 +524,9 @@ def _build_tests_pass3(model):
         })
 
 
-# Second pass to detect imports in try blocks and importlib/__import__ calls
+# Second pass to detect importlib/__import__ calls
 def _second_pass_unresolved(root_path, model):
-    """Second pass to detect dynamic imports and try blocks."""
+    """Second pass to detect dynamic imports."""
     for module_name, module_info in model["modules"].items():
         filepath = root_path / module_info["path"]
         
@@ -497,47 +536,6 @@ def _second_pass_unresolved(root_path, model):
             tree = ast.parse(source, filename=module_info["path"])
         except Exception:
             continue
-        
-        # Track try blocks
-        try_blocks = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Try):
-                try_blocks.append(node)
-        
-        # Find imports in try blocks
-        for try_node in try_blocks:
-            for node in ast.walk(try_node):
-                if isinstance(node, (ast.Import, ast.ImportFrom)):
-                    # Mark this import as being in a try block
-                    if isinstance(node, ast.Import):
-                        for alias in node.names:
-                            model["unresolved"].append({
-                                "module": module_name,
-                                "kind": "try",
-                                "detail": alias.name,
-                                "lineno": node.lineno
-                            })
-                            # Remove from regular imports
-                            module_info["imports"] = [
-                                imp for imp in module_info["imports"]
-                                if not (imp["target"] == alias.name and imp["lineno"] == node.lineno)
-                            ]
-                    elif isinstance(node, ast.ImportFrom):
-                        base = node.module or ''
-                        for alias in node.names:
-                            if alias.name != '*':
-                                target = f"{base}.{alias.name}" if base else alias.name
-                                model["unresolved"].append({
-                                    "module": module_name,
-                                    "kind": "try",
-                                    "detail": target,
-                                    "lineno": node.lineno
-                                })
-                                # Remove from regular imports
-                                module_info["imports"] = [
-                                    imp for imp in module_info["imports"]
-                                    if not (imp["target"] == target and imp["lineno"] == node.lineno)
-                                ]
         
         # Find importlib.import_module and __import__ calls
         for node in ast.walk(tree):

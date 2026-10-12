@@ -412,5 +412,90 @@ class TestAnalyzer(unittest.TestCase):
             self.assertIn('pkg.ok', result['modules'])
 
 
+    def test_try_import_not_counted_as_edge(self):
+        """Test that imports inside try blocks are not counted as edges."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create pkg/__init__.py
+            pkg_dir = tmp_path / 'pkg'
+            pkg_dir.mkdir()
+            (pkg_dir / '__init__.py').write_text('')
+            
+            # Create pkg/x.py
+            (pkg_dir / 'x.py').write_text('def y(): pass\n')
+            
+            # Create pkg/m.py with try import and regular import
+            (pkg_dir / 'm.py').write_text(
+                'try:\n'
+                '    import pkg.x\n'
+                'except ImportError:\n'
+                '    pass\n'
+                'from pkg.x import y\n'
+            )
+            
+            result = analyze(tmp_path)
+            
+            # Assert result is non-empty
+            self.assertTrue(result)
+            self.assertGreater(result["files_scanned"], 0)
+            
+            # Check that pkg.m has exactly one import with target pkg.x at lineno 5
+            self.assertIn("pkg.m", result["modules"])
+            pkg_m = result["modules"]["pkg.m"]
+            
+            pkg_x_imports = [imp for imp in pkg_m["imports"] if imp["target"] == "pkg.x"]
+            self.assertEqual(len(pkg_x_imports), 1)
+            self.assertTrue(pkg_x_imports[0]["internal"])
+            self.assertEqual(pkg_x_imports[0]["lineno"], 5)
+            
+            # Check try entries for pkg.m
+            try_entries = [(u["detail"], u["lineno"]) for u in result["unresolved"] 
+                          if u["module"] == "pkg.m" and u["kind"] == "try"]
+            self.assertEqual(try_entries, [("pkg.x", 2)])
+    
+    def test_nested_try_single_entry(self):
+        """Test that nested try blocks produce single entry."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create pkg/__init__.py
+            pkg_dir = tmp_path / 'pkg'
+            pkg_dir.mkdir()
+            (pkg_dir / '__init__.py').write_text('')
+            
+            # Create pkg/x.py
+            (pkg_dir / 'x.py').write_text('def y(): pass\n')
+            
+            # Create pkg/n.py with nested try blocks
+            (pkg_dir / 'n.py').write_text(
+                'try:\n'
+                '    try:\n'
+                '        from pkg.x import y\n'
+                '    except ImportError:\n'
+                '        y = None\n'
+                'except Exception:\n'
+                '    y = None\n'
+            )
+            
+            result = analyze(tmp_path)
+            
+            # Assert result is non-empty
+            self.assertTrue(result)
+            self.assertGreater(result["files_scanned"], 0)
+            
+            # Check that pkg.n has no import with target pkg.x
+            self.assertIn("pkg.n", result["modules"])
+            pkg_n = result["modules"]["pkg.n"]
+            
+            pkg_x_imports = [imp for imp in pkg_n["imports"] if imp["target"] == "pkg.x"]
+            self.assertEqual(len(pkg_x_imports), 0)
+            
+            # Check exactly one try entry for pkg.n with detail "pkg.x" and lineno 3
+            try_entries = [(u["detail"], u["lineno"]) for u in result["unresolved"] 
+                          if u["module"] == "pkg.n" and u["kind"] == "try"]
+            self.assertEqual(try_entries, [("pkg.x", 3)])
+
+
 if __name__ == '__main__':
     unittest.main()
