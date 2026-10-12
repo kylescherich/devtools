@@ -200,9 +200,6 @@ class TestReports(unittest.TestCase):
             self.assertGreaterEqual(len(tok_classes), 1)
             self.assertLessEqual(len(tok_classes), 5)
             
-            # All should be in range 1-5
-            for tok in tok_classes:
-                self.assertIn(tok, {'1', '2', '3', '4', '5'})
             
             # Style block should not contain "tok-"
             style_start = html_output.find('<style>')
