@@ -48,6 +48,9 @@ _MONTHS = {m: i for i, m in enumerate(
     ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"), start=1)}
 _SYSLOG_RE = re.compile(r"(" + "|".join(_MONTHS) + r") +(\d{1,2}) (\d{2}):(\d{2}):(\d{2})\b")
+# "host app[pid]:" or "host app:" right after a syslog timestamp.
+_SYSLOG_TAG_RE = re.compile(r"\s+(?P<host>[^\s:\[\]]+) +(?P<app>[^\s:\[\]]+)"
+                            r"(?:\[\d+\])?:(?=\s|$)")
 
 FIELD_KEYS = {
     "ts": ("ts", "time", "timestamp", "@timestamp"),
@@ -74,6 +77,8 @@ class Entry:
     file: str = ""
     line_no: int = 0
     truncated: bool = False
+    host: str | None = None       # syslog "host app[pid]:" header, if any
+    app: str | None = None
 
     def add_continuation(self, line):
         if self.truncated:
@@ -158,6 +163,18 @@ def parse_line_timestamp(line, year):
     if ts is not None:
         return ts, end
     return _syslog_at(line, year)
+
+
+def syslog_tag(line, start):
+    """(host, app, end) for a "host app[pid]:" / "host app:" header at start,
+    or None. A level word in either place means it is not a header."""
+    match = _SYSLOG_TAG_RE.match(line, start)
+    if not match:
+        return None
+    host, app = match.group("host", "app")
+    if host.upper() in LEVEL_WORDS or app.upper() in LEVEL_WORDS:
+        return None
+    return host, app, match.end()
 
 
 def _syslog_at(line, year):
@@ -321,10 +338,14 @@ class _Reader:
         current = None
         for line_no, line in self._lines(path):
             ts, end = _iso_at(line)
+            host = app = None
             if ts is None:
                 ts, end = _syslog_at(line, self.year)
                 if ts is not None:
                     self.result.syslog_used = True
+                    tag = syslog_tag(line, end)
+                    if tag:
+                        host, app, end = tag
             if ts is None:
                 if not line.strip():
                     continue
@@ -336,7 +357,8 @@ class _Reader:
                 continue
             if current is not None:
                 yield current
-            current = Entry(ts, find_level(line), line[end:].strip(), [], str(path), line_no)
+            current = Entry(ts, find_level(line), line[end:].strip(), [], str(path), line_no,
+                            host=host, app=app)
         if current is not None:
             yield current
 

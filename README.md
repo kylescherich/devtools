@@ -83,8 +83,24 @@ loglens export.log --input-format jsonl --field message=text --field ts=when
 Every report has the same sections in all three formats: a header (files and
 sizes, lines read, entries, untimed entries, invalid JSONL lines, replaced
 non-UTF-8 bytes, sampling, syslog year, bucket size, raw lines on/off,
-redaction on), a one-sentence summary, the groups table, the timeline,
-spikes, the incident view (top 5 groups) and, only with `--raw`, examples.
+redaction on), a one-sentence summary, warnings, the groups table, the timeline,
+spikes, the incident view (the top 5 WARNING+ groups by count; INFO and
+DEBUG groups appear only in the groups table) and, only with `--raw`,
+examples.
+Syslog lines: a `host app[pid]:` or `host app:` header right after the
+timestamp is taken out of the message before grouping, so the same error from
+several hosts is one group; the incident view lists each group's hosts and
+apps (count and up to 3 names, e.g. `hosts: 2 (web1, web2)  apps: 1 (nginx)`).
+
+Timeline bounds: `--bucket auto` picks the smallest size giving at most 200
+buckets; an explicit `--bucket` giving more than 2,000 buckets is refused with
+exit 2 and the message names the smallest size that fits. Entries more than
+30 days before or after the median timestamp are outliers: they still count
+in their groups, but are left off the timeline, its span and spike detection,
+and the warnings section reports them ("none" when there are none). Runs of 5
+or more buckets without WARNING+ events are shown as one "... N empty buckets
+..." line (one row in HTML).
+
 Reports are reproducible: the same inputs and arguments (including `--year`)
 give byte-identical output; the current date or time never appears.
 
@@ -98,7 +114,9 @@ give byte-identical output; the current date or time never appears.
   values, GitHub/`sk-`/AWS keys, JWTs, PEM blocks and 16-digit card numbers
   become `<redacted>`, also under `--raw`.
 - Control characters and bidi overrides in log text are shown as `\xNN` /
-  `\uXXXX`; Markdown and HTML are escaped; the HTML report has no scripts,
+  `\uXXXX`; in text and Markdown a literal backslash from the log is shown
+  doubled (`\\`), so a typed `\x1b` reads `\\x1b` and only a real control
+  reads `\x1b`; Markdown and HTML are escaped; the HTML report has no scripts,
   links or event handlers.
 - Inputs are only read: never through a symlink, and never written.
   `--output` refuses an existing file (unless `--force`), any symlink, and the
@@ -114,6 +132,6 @@ When several apply, the leftmost wins: 2 > 3 > 4 > 1 > 0.
 | --- | --- |
 | 0 | no entries at WARNING or above |
 | 1 | WARNING entries, none at ERROR or above |
-| 2 | usage error, including a refused `--output` |
+| 2 | usage error, including a refused `--output` or a `--bucket` over 2,000 buckets |
 | 3 | input missing, unreadable, invalid, a symlink, or over `--max-bytes` |
 | 4 | entries at ERROR or above (ERROR, ERR, CRITICAL, FATAL, ALERT, EMERG) |

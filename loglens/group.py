@@ -8,6 +8,7 @@ from loglens.redact import redact, redact_lines
 
 MAX_EXAMPLES = 2
 MAX_EXAMPLE_LINES = 20
+MAX_ORIGIN_NAMES = 3
 
 _URL = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s\"'<>]+")
 _EMAIL = re.compile(r"\b[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b")
@@ -79,30 +80,38 @@ class Group:
     first_ts: object = None
     last_ts: object = None
     files: list = field(default_factory=list)
+    first_index: int = 0          # position of the first entry in the input order
+    hosts: set = field(default_factory=set)        # syslog hosts, as read
+    apps: set = field(default_factory=set)         # syslog apps, as read
     examples: list = field(default_factory=list)   # redacted; rendered only with --raw
+
+    def origin_names(self, names):
+        """Up to MAX_ORIGIN_NAMES of names, redacted and sorted."""
+        return sorted({redact(name) for name in names})[:MAX_ORIGIN_NAMES]
 
 
 def _redacted_signature(entry):
+    """(redacted message, redacted continuation, signature): the one place an
+    entry's signature is computed."""
     message = redact(entry.message)
     continuation = redact_lines(entry.continuation_lines)
     return message, continuation, traceback_signature(continuation) or normalise(message)
 
 
-def entry_signature(entry):
-    """The signature an entry is grouped under (computed from redacted text)."""
-    return _redacted_signature(entry)[2]
-
-
-def group_entries(entries, *, keep_examples=False):
+def group_entries(entries, *, keep_examples=False, signatures=None):
     """Group entries by (level, signature). Messages are redacted before
-    normalising; examples are kept only when keep_examples is set."""
+    normalising; examples are kept only when keep_examples is set. If
+    `signatures` is a list, each entry's signature is appended to it in
+    order, for reuse (the incident context) without a second pass."""
     groups = {}
-    for entry in entries:
+    for index, entry in enumerate(entries):
         message, continuation, signature = _redacted_signature(entry)
+        if signatures is not None:
+            signatures.append(signature)
         key = (entry.level, signature)
         group = groups.get(key)
         if group is None:
-            group = groups[key] = Group(entry.level, signature)
+            group = groups[key] = Group(entry.level, signature, first_index=index)
         group.count += 1
         if entry.ts is not None:
             if group.first_ts is None or entry.ts < group.first_ts:
@@ -111,6 +120,10 @@ def group_entries(entries, *, keep_examples=False):
                 group.last_ts = entry.ts
         if entry.file not in group.files:
             group.files.append(entry.file)
+        if entry.host is not None:
+            group.hosts.add(entry.host)
+        if entry.app is not None:
+            group.apps.add(entry.app)
         if keep_examples and len(group.examples) < MAX_EXAMPLES:
             lines = [message, *continuation][:MAX_EXAMPLE_LINES]
             group.examples.append(redact("\n".join(lines)))

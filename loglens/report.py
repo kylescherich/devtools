@@ -2,8 +2,10 @@
 
 All three formats render the same sections from one Report. Every dynamic
 string passes the format's escape step (control characters as \\xNN, bidi
-controls as \\uXXXX; Markdown and HTML escape their own syntax on top). The
-CLI then sends the whole document through redact() on the way out.
+controls as \\uXXXX; Markdown and HTML escape their own syntax on top). In
+text and Markdown a literal backslash is doubled first, so a typed "\\x1b"
+shows as "\\\\x1b" and only a real control shows as "\\x1b". The CLI then
+sends the whole document through redact() on the way out.
 
 Values that can contain redacted text are placed last on their line, quoted,
 or (in HTML) followed by a newline: the final redact() pass leaves a label
@@ -18,12 +20,14 @@ from datetime import datetime, timezone
 from loglens.group import group_entries
 from loglens.readers import LEVEL_RANK, WARNING
 from loglens.redact import redact
-from loglens.timeline import (AUTO, MIN_SPIKE_BUCKETS, TOP_GROUPS, build_timeline,
-                              incidents)
+from loglens.timeline import (AUTO, MIN_SPIKE_BUCKETS, OUTLIER_SECONDS, TOP_GROUPS,
+                              build_timeline, incidents)
 
 FORMATS = ("text", "md", "html")
 BAR_WIDTH = 50
 SPIKES_IN_SUMMARY = 3
+NO_INCIDENTS = "no warning or error groups"
+MIN_EMPTY_RUN = 5
 
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029"
                      r"\u202a-\u202e\u2066-\u2069]")
@@ -35,19 +39,31 @@ def _escape_char(match):
     return f"\\x{code:02x}" if code <= 0xff else f"\\u{code:04x}"
 
 
-def escape_text(value):
+def _escape_controls(value):
     """Control characters -> \\xNN, bidi and line-separator characters -> \\uXXXX."""
     return _UNSAFE.sub(_escape_char, str(value))
 
 
+def _double_backslashes(value):
+    return str(value).replace("\\", "\\\\")
+
+
+def escape_text(value):
+    """Backslashes doubled, then controls escaped: the two never look alike."""
+    return _escape_controls(_double_backslashes(value))
+
+
 def escape_md(value):
-    return escape_text(html.escape(_MD_SPECIAL.sub(r"\\\1", str(value)), quote=False))
+    """Backslashes doubled before Markdown escaping, so they render doubled."""
+    escaped = _MD_SPECIAL.sub(r"\\\1", _double_backslashes(value))
+    return _escape_controls(html.escape(escaped, quote=False))
 
 
 def escape_html(value):
     # Values only ever land in text nodes, never in attributes, so quotes stay
-    # literal; that also lets the final redact() pass stop at them.
-    return html.escape(escape_text(value), quote=False)
+    # literal; that also lets the final redact() pass stop at them. Backslashes
+    # stay single: HTML has no backslash escapes to confuse them with.
+    return html.escape(_escape_controls(value), quote=False)
 
 
 def _ts(value):
@@ -141,9 +157,10 @@ def build_report(result, groups, timeline, incidents, *, raw=False, context=0,
 def analyse(result, *, raw=False, bucket=AUTO, context=0):
     """ReadResult -> Report: groups, timeline, spikes and incident view."""
     sequence = result.entries + result.untimed
-    groups = group_entries(sequence, keep_examples=raw)
+    signatures = []
+    groups = group_entries(sequence, keep_examples=raw, signatures=signatures)
     timeline = build_timeline(result.entries, bucket)
-    view = incidents(groups, sequence, context=context, raw=raw)
+    view = incidents(groups, sequence, signatures, context=context, raw=raw)
     return build_report(result, groups, timeline, view, raw=raw, context=context,
                         bucket_spec=bucket)
 
@@ -152,6 +169,50 @@ def _bar(total, peak):
     if not total or not peak:
         return ""
     return "#" * max(1, round(total * BAR_WIDTH / peak))
+
+
+def _timeline_rows(tl):
+    """Buckets in order; each run of MIN_EMPTY_RUN or more buckets without
+    ERROR+/WARNING events is replaced by its length (an int). Display only:
+    spike detection always sees every bucket."""
+    rows, run = [], []
+    for b in [*tl.buckets, None]:
+        if b is not None and not b.total:
+            run.append(b)
+            continue
+        rows += [len(run)] if len(run) >= MIN_EMPTY_RUN else run
+        run = []
+        if b is not None:
+            rows.append(b)
+    return rows
+
+
+def _empty_run(count):
+    return f"... {count} empty buckets ..."
+
+
+def _bucket_line(b, peak):
+    return (f"{_bucket_ts(b.start)}  E {b.errors:>6}  W {b.warnings:>6}  "
+            f"{_bar(b.total, peak)}").rstrip()
+
+
+def _warning_lines(tl):
+    if not tl.outliers:
+        return ["none"]
+    count = len(tl.outliers)
+    first = min(e.ts for e in tl.outliers)
+    return [f"{count} {'entry' if count == 1 else 'entries'} with outlying "
+            f"timestamps (first {_ts(first)}); more than "
+            f"{OUTLIER_SECONDS // 86400} days from the median, counted in their "
+            "groups but left off the timeline"]
+
+
+def _origin(group):
+    """'hosts: 2 (web1, web2)  apps: 1 (nginx)' for syslog groups, else None."""
+    if not group.hosts and not group.apps:
+        return None
+    return "  ".join(f"{label}: {len(names)} ({', '.join(group.origin_names(names))})"
+                     for label, names in (("hosts", group.hosts), ("apps", group.apps)))
 
 
 def _size(size):
@@ -174,6 +235,9 @@ def _render_text(rep):
     _section(out, "summary")
     out.append(e(rep.summary))
 
+    _section(out, "warnings")
+    out += [e(line) for line in _warning_lines(rep.timeline)]
+
     _section(out, f"groups ({len(rep.groups)})")
     out.append(f"{'LEVEL':<8} {'COUNT':>7}  {'FIRST':<20}  {'LAST':<20}  SIGNATURE")
     for g in rep.groups:
@@ -185,21 +249,22 @@ def _render_text(rep):
     if not tl.buckets:
         out.append("no timestamped entries")
     peak = max((b.total for b in tl.buckets), default=0)
-    for b in tl.buckets:
-        out.append(f"{_bucket_ts(b.start)}  E {b.errors:>6}  W {b.warnings:>6}  "
-                   f"{_bar(b.total, peak)}".rstrip())
+    out += [_empty_run(row) if isinstance(row, int) else _bucket_line(row, peak)
+            for row in _timeline_rows(tl)]
 
     _section(out, "spikes")
     out += [e(line) for line in _spike_lines(tl)]
 
     _section(out, f"incident view (top {TOP_GROUPS})")
     if not rep.incidents:
-        out.append("no groups")
+        out.append(NO_INCIDENTS)
     for n, inc in enumerate(rep.incidents, 1):
         g = inc.group
         out.append(f"{n}. {e(g.level)} x{g.count}  {e(g.signature)}")
         out.append(f"   first {_ts(g.first_ts)}  last {_ts(g.last_ts)}")
         out.append(f"   files: {e(', '.join(g.files))}")
+        if _origin(g):
+            out.append(f"   {e(_origin(g))}")
         for label, items in (("before", inc.before), ("after", inc.after)):
             if rep.context <= 0:
                 continue
@@ -242,6 +307,9 @@ def _render_md(rep):
 
     out += ["", "## Summary", "", e(rep.summary)]
 
+    out += ["", "## Warnings", ""]
+    out += [f"- {e(line)}" for line in _warning_lines(rep.timeline)]
+
     out += ["", f"## Groups ({len(rep.groups)})", ""]
     out += ["| level | count | first | last | signature |",
             "| --- | ---: | --- | --- | --- |"]
@@ -256,8 +324,8 @@ def _render_md(rep):
     else:
         peak = max(b.total for b in tl.buckets)
         out.append("```")
-        out += [f"{_bucket_ts(b.start)}  E {b.errors:>6}  W {b.warnings:>6}  "
-                f"{_bar(b.total, peak)}".rstrip() for b in tl.buckets]
+        out += [_empty_run(row) if isinstance(row, int) else _bucket_line(row, peak)
+                for row in _timeline_rows(tl)]
         out.append("```")
 
     out += ["", "## Spikes", ""]
@@ -265,12 +333,14 @@ def _render_md(rep):
 
     out += ["", f"## Incident view (top {TOP_GROUPS})", ""]
     if not rep.incidents:
-        out.append("No groups.")
+        out.append(NO_INCIDENTS)
     for n, inc in enumerate(rep.incidents, 1):
         g = inc.group
         out.append(f"{n}. {e(g.level)} x{g.count}: {e(g.signature)}")
         out.append(f"    - first {_ts(g.first_ts)}, last {_ts(g.last_ts)}")
         out.append(f"    - files: {e(', '.join(g.files))}")
+        if _origin(g):
+            out.append(f"    - {e(_origin(g))}")
         for label, items in (("before", inc.before), ("after", inc.after)):
             if rep.context <= 0:
                 continue
@@ -347,6 +417,9 @@ def _render_html(rep):
     out += [f"<tr><th>{e(label)}</th><td>{e(value)}</td></tr>"
             for label, value in rep.header]
     out += ["</table>", "<h2>Summary</h2>", f"<p>{e(rep.summary)}</p>"]
+    out += ["<h2>Warnings</h2>", "<ul>"]
+    out += [f"<li>{e(line)}</li>" for line in _warning_lines(rep.timeline)]
+    out.append("</ul>")
 
     out += [f"<h2>Groups ({len(rep.groups)})</h2>", "<table>",
             "<tr><th>level</th><th>count</th><th>first</th><th>last</th>"
@@ -366,18 +439,29 @@ def _render_html(rep):
         out += _svg(tl)
         out.append(f"<p>{len(tl.buckets)} buckets from {_bucket_ts(tl.buckets[0].start)} "
                    f"to {_bucket_ts(tl.buckets[-1].start)}</p>")
+        out += ["<table>", "<tr><th>bucket</th><th>E</th><th>W</th></tr>"]
+        for row in _timeline_rows(tl):
+            if isinstance(row, int):
+                out.append(f'<tr><td colspan="3">{_empty_run(row)}</td></tr>')
+            else:
+                out.append(f"<tr><td>{_bucket_ts(row.start)}</td>"
+                           f'<td class="n">{row.errors}</td>'
+                           f'<td class="n">{row.warnings}</td></tr>')
+        out.append("</table>")
 
     out += ["<h2>Spikes</h2>", "<ul>"]
     out += [f"<li>{e(line)}</li>" for line in _spike_lines(tl)]
     out += ["</ul>", f"<h2>Incident view (top {TOP_GROUPS})</h2>"]
     if not rep.incidents:
-        out.append("<p>No groups.</p>")
+        out.append(f"<p>{NO_INCIDENTS}</p>")
     out.append("<ol>")
     for inc in rep.incidents:
         g = inc.group
         out.append(f"<li><p>{e(g.level)} x{g.count}: <code>{e(g.signature)}</code></p>")
         out.append(f"<p>first {_ts(g.first_ts)}, last {_ts(g.last_ts)}; "
                    f"files: {e(', '.join(g.files))}</p>")
+        if _origin(g):
+            out.append(f"<p>{e(_origin(g))}</p>")
         for label, items in (("before", inc.before), ("after", inc.after)):
             if rep.context <= 0:
                 continue

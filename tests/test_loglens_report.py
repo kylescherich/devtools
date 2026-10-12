@@ -5,6 +5,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
+from unittest import mock
+
+import loglens.group
 from loglens.cli import main
 from loglens.readers import ERROR, WARNING, Entry, read_logs
 from loglens.redact import REDACTED, redact
@@ -134,6 +137,29 @@ class TestEscaping(ReportTestCase):
                     if extra:
                         self.assertIn("alert(1)", out)
 
+    def test_backslash_unambiguous(self):
+        # one line: a typed backslash-x1b, then a real ESC
+        path = fx.write_lines(self.dir, "app.log",
+                              [f"{iso(T0)} ERROR lit \\x1b real \x1b end"])
+        self.assertIn(b"lit \\x1b real \x1b end", path.read_bytes())
+        # (format, --raw example, default signature); md escapes the doubled
+        # pair once more, so it renders as two backslashes.
+        cases = (("text", r"lit \\x1b real \x1b end", r"lit \\x<n>b real \x1b end"),
+                 ("md", r"lit \\\\x1b real \x1b end",
+                  r"lit \\\\x&lt;n&gt;b real \x1b end"))
+        for fmt, example, signature in cases:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt, "--raw"])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertNotIn("\x1b", out)                  # no real ESC
+                self.assertIn(example, out)
+                _, out, _ = run([path, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertIn(signature, out)
+        _, out, _ = run([path, "--format", "html", "--raw"])
+        self.assertTrue(out.strip(), "report is empty")
+        self.assertIn(r"lit \x1b real \x1b end", out)        # HTML unchanged
+
     def test_md_table_row_stays_one_row(self):
         path = fx.write_lines(self.dir, "app.log", [f"{iso(T0)} ERROR x | y | z"])
         _, out, _ = run([path, "--format", "md"])
@@ -215,6 +241,84 @@ class TestTimeline(ReportTestCase):
         self.assertIn("untimed entries (not on the timeline): 1", render(analyse(result)))
 
 
+class TestTimelineBounds(ReportTestCase):
+    def test_bucket_cap_exit_2(self):
+        lines = [f"{iso(T0 + timedelta(hours=h))} ERROR job failed" for h in range(73)]
+        path = fx.write_lines(self.dir, "app.log", lines)       # 3-day span
+        code, out, err = run([path, "--bucket", "1m"])
+        self.assertTrue(err.strip(), "no error message")
+        self.assertEqual(code, 2)
+        self.assertEqual(out, "")
+        self.assertIn("--bucket 1m gives 4321 buckets (limit 2000)", err)
+        self.assertIn("use --bucket 5m or larger", err)
+        code, out, _ = run([path, "--bucket", "5m"])
+        self.assertTrue(out.strip())
+        self.assertEqual(code, 4)
+        self.assertIn("bucket: 5m\n", out)
+        _, out, _ = run([path])
+        self.assertTrue(out.strip())
+        self.assertIn("bucket: 1h (auto)\n", out)              # auto stays <= 200
+        code, out, err = run(["--help"])
+        self.assertTrue(out.strip())
+        self.assertIn("2000", out)
+
+    def test_outlier_timestamp_excluded(self):
+        lines = ["1970-01-01T00:00:00Z ERROR job 0 failed"]
+        lines += [f"{iso(T0 + timedelta(minutes=15 * i))} ERROR job {i} failed"
+                  for i in range(1, 97)]                        # 1-day span
+        path = fx.write_lines(self.dir, "app.log", lines)
+        result = read_logs([path])
+        tl = build_timeline(result.entries)
+        self.assertEqual(tl.name, "15m")
+        self.assertEqual([e.ts.year for e in tl.outliers], [1970])
+        self.assertEqual(tl.buckets[0].start, int((T0 + timedelta(minutes=15)).timestamp()))
+        self.assertEqual(sum(b.errors for b in tl.buckets), 96)
+        self.assertEqual(analyse(result).groups[0].count, 97)
+        warning = ("1 entry with outlying timestamps (first 1970-01-01T00:00:00Z)")
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertIn(warning, out)
+                self.assertIn("15m (auto)", out)
+                self.assertIn("x97", out)                       # group count includes it
+                self.assertNotIn("1970-01-01T00:00:00Z  E", out)  # not a bucket
+                low = out.lower()
+                self.assertLess(low.index("summary"), low.index("warnings"))
+                self.assertLess(low.index("warnings"), low.index("groups ("))
+
+        clean = fx.write_lines(self.dir, "clean.log", lines[1:])
+        for fmt in FORMATS:
+            _, out, _ = run([clean, "--format", fmt])
+            self.assertTrue(out.strip())
+            self.assertNotIn("outlying", out)
+            section = out[out.lower().index("warnings"):out.lower().index("groups (")]
+            self.assertIn("none", section)
+
+    def test_empty_bucket_runs_collapsed(self):
+        minutes = [0, 1, 12, 13, 18]          # 10 empty (2..11), then 4 empty (14..17)
+        lines = [f"{iso(T0 + timedelta(minutes=m))} ERROR boom" for m in minutes]
+        path = fx.write_lines(self.dir, "app.log", lines)
+        tl = build_timeline(read_logs([path]).entries, "1m")
+        self.assertEqual(len(tl.buckets), 19)                   # spikes see all buckets
+        empty_row = "E      0  W      0"
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt, "--bucket", "1m"])
+                self.assertTrue(out.strip(), "report is empty")
+                self.assertEqual(out.count("... 10 empty buckets ..."), 1)
+                self.assertNotIn("... 4 empty buckets ...", out)
+                if fmt == "html":
+                    self.assertIn('<tr><td colspan="3">... 10 empty buckets ...</td></tr>',
+                                  out)
+                    self.assertEqual(out.count('<td class="n">0</td><td class="n">0</td>'), 4)
+                else:
+                    self.assertEqual(out.count(empty_row), 4)
+                    self.assertIn(f"{iso(T0 + timedelta(minutes=1))}  E      1", out)
+                    self.assertIn(f"{iso(T0 + timedelta(minutes=14))}  {empty_row}", out)
+                self.assertIn("threshold", out)                 # 19 >= 10 buckets
+
+
 class TestIncidents(ReportTestCase):
     def _log(self):
         lines, t = [], [T0]
@@ -242,12 +346,14 @@ class TestIncidents(ReportTestCase):
         result = read_logs([self._log()])
         rep = analyse(result, context=1)
         order = [(i.group.level, i.group.signature) for i in rep.incidents]
+        # WARNING+ only, count desc; ties by first occurrence (bravo before
+        # alpha, after-bravo before echo), INFO tick and DEBUG never listed.
         self.assertEqual(order, [
-            ("ERROR", "ERROR charlie failed"),
-            ("ERROR", "ERROR alpha failed"),
-            ("ERROR", "ERROR bravo failed"),
-            ("ERROR", "CRITICAL echo once"),
             ("WARNING", "WARN delta slow <n>"),
+            ("ERROR", "ERROR charlie failed"),
+            ("ERROR", "ERROR bravo failed"),
+            ("ERROR", "ERROR alpha failed"),
+            ("WARNING", "WARN after-bravo <n>"),
         ])
         bravo = rep.incidents[2]
         self.assertEqual([(c.level, c.signature) for c in bravo.before],
@@ -267,6 +373,80 @@ class TestIncidents(ReportTestCase):
             self.assertIn("INFO before-bravo 777", out)
             self.assertIn("WARN after-bravo 888", out)
 
+    @staticmethod
+    def _incident_section(out, fmt):
+        start = out.lower().index("incident view (top 5)")
+        end = {"text": "\n\n", "md": "\n\n## ", "html": "</ol>"}[fmt]
+        stop = out.find(end, start + 25)
+        return out[start:stop if stop != -1 else len(out)]
+
+    @staticmethod
+    def _incident_count(section, fmt):
+        if fmt == "html":
+            return section.count("<li><p>")
+        return len(re.findall(r"(?m)^\d+\. ", section))
+
+    def test_incident_view_warning_plus_only(self):
+        lines, t = [], [T0]
+
+        def add(text, times=1):
+            for _ in range(times):
+                lines.append(f"{iso(t[0])} {text}")
+                t[0] += timedelta(seconds=1)
+        add("INFO request served", 300)
+        add("DEBUG cache probe", 200)
+        add("ERROR upstream timeout", 4)
+        add("INFO heartbeat ok", 150)
+        add("WARN queue backlog", 2)
+        add("CRITICAL disk failure")
+        add("DEBUG gc pass", 120)
+        path = fx.write_lines(self.dir, "app.log", lines)
+        rep = analyse(read_logs([path]))
+        self.assertEqual([(i.group.level, i.group.signature, i.group.count)
+                          for i in rep.incidents],
+                         [("ERROR", "ERROR upstream timeout", 4),
+                          ("WARNING", "WARN queue backlog", 2),
+                          ("ERROR", "CRITICAL disk failure", 1)])
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                section = self._incident_section(out, fmt)
+                self.assertTrue(section.strip())
+                self.assertEqual(self._incident_count(section, fmt), 3, section)
+                for quiet in ("request served", "cache probe", "heartbeat ok", "gc pass"):
+                    self.assertNotIn(quiet, section)
+                    self.assertIn(quiet, out)            # still in the groups table
+                self.assertIn("upstream timeout", section)
+                self.assertIn("disk failure", section)
+                self.assertNotIn("no warning or error groups", section)
+
+        quiet = fx.write_lines(self.dir, "quiet.log",
+                               [f"{iso(T0)} INFO fine", f"{iso(T0)} DEBUG probe"])
+        self.assertEqual(analyse(read_logs([quiet])).incidents, [])
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt, case="none"):
+                _, out, _ = run([quiet, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                section = self._incident_section(out, fmt)
+                self.assertIn("no warning or error groups", section)
+                self.assertEqual(self._incident_count(section, fmt), 0)
+                self.assertNotIn("fine", section)
+
+    def test_context_signature_computed_once(self):
+        path = self._log()
+        lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(lines)
+        real = loglens.group._redacted_signature
+        with mock.patch.object(loglens.group, "_redacted_signature",
+                               side_effect=real) as spy:
+            code, out, _ = run([path, "--context", "3"])
+        self.assertTrue(out.strip(), "report is empty")
+        self.assertEqual(code, 4)
+        self.assertIn("before (3):", out)                   # context was built
+        self.assertEqual(spy.call_count, len(lines))
+        self.assertEqual(len({id(c.args[0]) for c in spy.call_args_list}), len(lines))
+
     def test_context_default_zero_and_negative_refused(self):
         result = read_logs([self._log()])
         rep = analyse(result)
@@ -275,6 +455,47 @@ class TestIncidents(ReportTestCase):
         code, _, err = run([self._log(), "--context", "-1"])
         self.assertEqual(code, 2)
         self.assertTrue(err)
+
+
+class TestSyslogOrigin(ReportTestCase):
+    def test_syslog_hosts_merge_into_one_group(self):
+        lines = ["Mar  1 10:00:00 web1 nginx[123]: ERROR upstream timed out",
+                 "Mar  1 10:00:05 web2 nginx[456]: ERROR upstream timed out",
+                 "Mar  1 10:00:09 web2 nginx: ERROR upstream timed out"]
+        lines += [f"Mar  1 10:01:0{i} db{i} postgres[9{i}]: WARN slow query"
+                  for i in (4, 1, 3, 2)]
+        lines.append("Mar  1 10:02:00 myhost ERROR: not a header")
+        path = fx.write_lines(self.dir, "syslog", lines)
+        result = read_logs([path], year=2026)
+        first = result.entries[0]
+        self.assertEqual((first.host, first.app, first.message),
+                         ("web1", "nginx", "ERROR upstream timed out"))
+        self.assertEqual((result.entries[-1].host, result.entries[-1].message),
+                         (None, "myhost ERROR: not a header"))
+        groups = {g.signature: g for g in analyse(result).groups}
+        upstream = groups["ERROR upstream timed out"]
+        self.assertEqual(upstream.count, 3)
+        self.assertEqual((upstream.hosts, upstream.apps), ({"web1", "web2"}, {"nginx"}))
+        self.assertEqual(groups["WARN slow query"].count, 4)
+        self.assertEqual(len([s for s in groups if "upstream" in s]), 1)
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--year", "2026", "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                incident = out[out.lower().index("incident view"):]
+                self.assertIn("hosts: 2 (web1, web2)  apps: 1 (nginx)", incident)
+                self.assertIn("hosts: 4 (db1, db2, db3)  apps: 1 (postgres)", incident)
+                self.assertNotIn("db4", out)
+                self.assertNotIn("web1 nginx", out)
+
+    def test_syslog_origin_names_redacted(self):
+        path = fx.write_lines(self.dir, "syslog", [
+            "Mar  1 10:00:00 token=SNThostTok app: ERROR boom"])
+        for fmt in FORMATS:
+            _, out, _ = run([path, "--year", "2026", "--format", fmt])
+            self.assertTrue(out.strip(), "report is empty")
+            self.assertIn("hosts: 1 (token=", out)
+            self.assertNotIn("SNThostTok", out)
 
 
 class TestHeaderAndSummary(ReportTestCase):
