@@ -136,9 +136,6 @@ def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, 
         timed_out = False
         row_limited = False
         
-        # Check deadline before first row
-        if deadline is not None and time.monotonic() >= deadline:
-            timed_out = True
         
         for row in reader:
             # Check deadline every 10,000 rows (including 0)
@@ -192,7 +189,7 @@ def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, 
                 _test_types(value.strip(), col_data)
         
         # Check if we sampled
-        sampled = timed_out or row_limited
+        sampled = timed_out or row_limited or size_warning_added
         
         # Add malformed warning
         if malformed_count > 0:
