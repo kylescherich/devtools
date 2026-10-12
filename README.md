@@ -150,6 +150,13 @@ Details:
   (`db_pass=`, `dbPass=`, `X-Auth:`, `sas_sig=`, but not `bypass=`,
   `oauth_state=`, `design=`, `signal=`). Names that merely contain a word are
   redacted too, so `tokens: 5` becomes `tokens: <redacted>`.
+- Multi-word values: for names containing `password`, `passwd`,
+  `passphrase`, `secret` or `credential`, and for the personal fields, an
+  unquoted value runs to the end of the line or to the next ` key=`,
+  `, key=`, `; key=` or `&key=` field: `password=a b c user=bob` becomes
+  `password=<redacted> user=bob`. Spoken forms `password is X`, `password was
+  X`, `passphrase is X`, `credentials were X` redact the next word (also
+  "password is incorrect"; keep-words below stay).
 - Session material: names containing `csrf`, `xsrf` or `cookie`; `session`
   and `sid` as the whole name or its last component (`session_id`,
   `jsessionid`, `user_session`, `connect.sid`; not `session_count`,

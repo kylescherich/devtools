@@ -52,7 +52,7 @@ class TestCredentials(RedactTable):
         self.check_rows(ORDINARY + [
             # a. name-contains keys
             ("AWS_SECRET_ACCESS_KEY=SNTa1", f"AWS_SECRET_ACCESS_KEY={R}"),
-            ("client_secret=SNTa2 x", f"client_secret={R} x"),
+            ("client_secret=SNTa2 x=1", f"client_secret={R} x=1"),
             ("refresh_token: SNTa3", f"refresh_token: {R}"),
             ("AccountKey=SNTa4;", f"AccountKey={R};"),
             ("sig=SNTa5&x=1", f"sig={R}&x=1"),
@@ -167,13 +167,13 @@ class TestPersonal(RedactTable):
             ("n 41111111111111110 ok", "n 41111111111111110 ok"),       # 17, not Luhn
             ("port 8080 pid 31337 took 1234 ms", "port 8080 pid 31337 took 1234 ms"),
             # b. labelled personal fields
-            ("phone=SNTc1 ok", f"phone={R} ok"),
+            ("phone=SNTc1 ok=1", f"phone={R} ok=1"),
             ("user_phone: SNTc2", f"user_phone: {R}"),
             ("mobilePhone=SNTc3", f"mobilePhone={R}"),
             ("tel=SNTc4", f"tel={R}"),
             ("Tel: SNTc5", f"Tel: {R}"),
             ("mobile=SNTc6", f"mobile={R}"),
-            ("dob=1990-01-02 ok", f"dob={R} ok"),
+            ("dob=1990-01-02 ok=1", f"dob={R} ok=1"),
             ("birth_date: 1990-01-02", f"birth_date: {R}"),
             ("birthDate=1990-01-02", f"birthDate={R}"),
             ("SSN=SNTc7", f"SSN={R}"),
@@ -186,7 +186,7 @@ class TestPersonal(RedactTable):
             ("hotel=Ritz", "hotel=Ritz"),
             ("telemetry=on", "telemetry=on"),
             ("automobile=car", "automobile=car"),
-            ("phone_number=+15550100 ok", f"phone_number={R} ok"),
+            ("phone_number=+15550100 ok=1", f"phone_number={R} ok=1"),
             ("mobile_number: SNTc14", f"mobile_number: {R}"),
             ("telephone=SNTc15", f"telephone={R}"),
             ("date_of_birth=1990-01-02", f"date_of_birth={R}"),
@@ -205,3 +205,37 @@ class TestPersonal(RedactTable):
         elapsed = time.perf_counter() - start
         self.assertTrue(out)
         self.assertLess(elapsed, 1.0)
+
+
+class TestMultiWord(RedactTable):
+    def test_item4_multi_word_values(self):
+        self.check_rows(ORDINARY + [
+            ("password=my secret phrase", f"password={R}"),
+            ("password=a b c user=bob", f"password={R} user=bob"),
+            ("password=a b c, user=bob", f"password={R}, user=bob"),
+            ("password=a b c; user=bob", f"password={R}; user=bob"),
+            ("password=a b c&user=bob", f"password={R}&user=bob"),
+            ("db_password: two words\nnext=1", f"db_password: {R}\nnext=1"),
+            ("PASSWD=x y z", f"PASSWD={R}"),
+            ("passphrase=the quick fox user=a", f"passphrase={R} user=a"),
+            ("client_secret=SNT d1 x", f"client_secret={R}"),
+            ("user_credentials=a b level=info", f"user_credentials={R} level=info"),
+            ("phone=+1 555 0100 user=bob", f"phone={R} user=bob"),
+            ("dob=02 Jan 1990 ok", f"dob={R}"),
+            ("patient_id=AB 12 34 ward=3", f"patient_id={R} ward=3"),
+            ('password="a b" user=bob', f'password="{R}" user=bob'),
+            ("password=<redacted> SNTd2 more", f"password={R}"),   # marker is no shield
+            ("password=none user=bob", "password=none user=bob"),
+            ("password=none of your business", f"password={R}"),
+            ("token=a b", f"token={R} b"),          # single-token key: unchanged extent
+            # spoken forms
+            ("user said password is SNTd3 today", f"user said password is {R} today"),
+            ("old password was SNTd4.", f"old password was {R}"),
+            ("passphrase is SNTd5", f"passphrase is {R}"),
+            ("credentials were SNTd6 then", f"credentials were {R} then"),
+            ('secret is "SNT d7" ok', f'secret is "{R}" ok'),
+            ("password is missing", "password is missing"),
+            ("password was invalid", "password was invalid"),
+            ("password is incorrect", f"password is {R}"),   # accepted over-redaction
+            ("password reset requested", "password reset requested"),
+        ])

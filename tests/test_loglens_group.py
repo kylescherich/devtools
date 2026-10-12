@@ -48,6 +48,8 @@ SECRET_CASES = [
      "SNTcookieGarnet"),
     ("jade", "card 3782-822463-10005 declined", "822463"),
     ("onyx", "callback phone=+1-555-SNTphoneOnyx ok", "SNTphoneOnyx"),
+    ("ruby", "login password=correct horse SNTmwRuby staple", "SNTmwRuby"),
+    ("topaz", "user said password is SNTspokenTopaz today", "SNTspokenTopaz"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]
@@ -235,7 +237,8 @@ class TestRedaction(GroupTestCase):
             "{'pass': 'SNTd'}": f"{{'pass': '{REDACTED}'}}",
             "PASS=SNTe": f"PASS={REDACTED}",
             "passphrase: SNTf": f"passphrase: {REDACTED}",
-            "credentials=SNTg;": f"credentials={REDACTED};",
+            # multi-word value: runs to the end of the line (DEC-189 item 4)
+            "credentials=SNTg;": f"credentials={REDACTED}",
             "Credential = SNTh": f"Credential = {REDACTED}",
             "auth: login ok": f"auth: {REDACTED} ok",       # accepted over-redaction
         }
