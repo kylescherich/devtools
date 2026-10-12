@@ -211,6 +211,10 @@ def inspect_sqlite(path, max_rows=1_000_000, deadline=None, frozen=False):
                     "name": obj_name,
                     "type": obj_type,
                     "error": error_msg,
+                    "row_count": None,
+                    "sampled": False,
+                    "foreign_keys": [],
+                    "indexes": [],
                     "columns": []
                 }
                 result["tables"].append(table_info)

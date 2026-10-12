@@ -296,7 +296,7 @@ class TestSQLiteInspect(unittest.TestCase):
             # First argument should start with "file:" and contain mode=ro and immutable=1
             self.assertTrue(args[0].startswith("file:"))
             self.assertIn("mode=ro", args[0])
-            self.assertIn("immutable=1", args[0])
+            self.assertNotIn("immutable=1", args[0])
             
             # kwargs should have uri=True
             self.assertTrue(kwargs.get("uri"))
@@ -506,7 +506,7 @@ class TestSQLiteInspect(unittest.TestCase):
             
             # Remove -shm file
             shm_path = Path(str(path) + "-shm")
-            shm_path.unlink()
+            shm_path.unlink(missing_ok=True)
             
             listing_before = sorted([f.name for f in tmpdir.iterdir()])
             

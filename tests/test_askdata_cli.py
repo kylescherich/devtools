@@ -581,7 +581,7 @@ class TestAskdataCLI(unittest.TestCase):
             
             # Remove -shm file
             shm_path = Path(str(path) + "-shm")
-            shm_path.unlink()
+            shm_path.unlink(missing_ok=True)
             
             exit_code, stdout, stderr = self._capture_main([
                 "inspect", str(path)
