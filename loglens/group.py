@@ -79,6 +79,7 @@ class Group:
     first_ts: object = None
     last_ts: object = None
     files: list = field(default_factory=list)
+    first_index: int = 0          # position of the first entry in the input order
     examples: list = field(default_factory=list)   # redacted; rendered only with --raw
 
 
@@ -97,12 +98,12 @@ def group_entries(entries, *, keep_examples=False):
     """Group entries by (level, signature). Messages are redacted before
     normalising; examples are kept only when keep_examples is set."""
     groups = {}
-    for entry in entries:
+    for index, entry in enumerate(entries):
         message, continuation, signature = _redacted_signature(entry)
         key = (entry.level, signature)
         group = groups.get(key)
         if group is None:
-            group = groups[key] = Group(entry.level, signature)
+            group = groups[key] = Group(entry.level, signature, first_index=index)
         group.count += 1
         if entry.ts is not None:
             if group.first_ts is None or entry.ts < group.first_ts:

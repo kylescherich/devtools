@@ -24,6 +24,7 @@ from loglens.timeline import (AUTO, MIN_SPIKE_BUCKETS, TOP_GROUPS, build_timelin
 FORMATS = ("text", "md", "html")
 BAR_WIDTH = 50
 SPIKES_IN_SUMMARY = 3
+NO_INCIDENTS = "no warning or error groups"
 
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029"
                      r"\u202a-\u202e\u2066-\u2069]")
@@ -194,7 +195,7 @@ def _render_text(rep):
 
     _section(out, f"incident view (top {TOP_GROUPS})")
     if not rep.incidents:
-        out.append("no groups")
+        out.append(NO_INCIDENTS)
     for n, inc in enumerate(rep.incidents, 1):
         g = inc.group
         out.append(f"{n}. {e(g.level)} x{g.count}  {e(g.signature)}")
@@ -265,7 +266,7 @@ def _render_md(rep):
 
     out += ["", f"## Incident view (top {TOP_GROUPS})", ""]
     if not rep.incidents:
-        out.append("No groups.")
+        out.append(NO_INCIDENTS)
     for n, inc in enumerate(rep.incidents, 1):
         g = inc.group
         out.append(f"{n}. {e(g.level)} x{g.count}: {e(g.signature)}")
@@ -371,7 +372,7 @@ def _render_html(rep):
     out += [f"<li>{e(line)}</li>" for line in _spike_lines(tl)]
     out += ["</ul>", f"<h2>Incident view (top {TOP_GROUPS})</h2>"]
     if not rep.incidents:
-        out.append("<p>No groups.</p>")
+        out.append(f"<p>{NO_INCIDENTS}</p>")
     out.append("<ol>")
     for inc in rep.incidents:
         g = inc.group

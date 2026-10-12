@@ -242,12 +242,14 @@ class TestIncidents(ReportTestCase):
         result = read_logs([self._log()])
         rep = analyse(result, context=1)
         order = [(i.group.level, i.group.signature) for i in rep.incidents]
+        # WARNING+ only, count desc; ties by first occurrence (bravo before
+        # alpha, after-bravo before echo), INFO tick and DEBUG never listed.
         self.assertEqual(order, [
-            ("ERROR", "ERROR charlie failed"),
-            ("ERROR", "ERROR alpha failed"),
-            ("ERROR", "ERROR bravo failed"),
-            ("ERROR", "CRITICAL echo once"),
             ("WARNING", "WARN delta slow <n>"),
+            ("ERROR", "ERROR charlie failed"),
+            ("ERROR", "ERROR bravo failed"),
+            ("ERROR", "ERROR alpha failed"),
+            ("WARNING", "WARN after-bravo <n>"),
         ])
         bravo = rep.incidents[2]
         self.assertEqual([(c.level, c.signature) for c in bravo.before],
@@ -266,6 +268,66 @@ class TestIncidents(ReportTestCase):
             self.assertTrue(out)
             self.assertIn("INFO before-bravo 777", out)
             self.assertIn("WARN after-bravo 888", out)
+
+    @staticmethod
+    def _incident_section(out, fmt):
+        start = out.lower().index("incident view (top 5)")
+        end = {"text": "\n\n", "md": "\n\n## ", "html": "</ol>"}[fmt]
+        stop = out.find(end, start + 25)
+        return out[start:stop if stop != -1 else len(out)]
+
+    @staticmethod
+    def _incident_count(section, fmt):
+        if fmt == "html":
+            return section.count("<li><p>")
+        return len(re.findall(r"(?m)^\d+\. ", section))
+
+    def test_incident_view_warning_plus_only(self):
+        lines, t = [], [T0]
+
+        def add(text, times=1):
+            for _ in range(times):
+                lines.append(f"{iso(t[0])} {text}")
+                t[0] += timedelta(seconds=1)
+        add("INFO request served", 300)
+        add("DEBUG cache probe", 200)
+        add("ERROR upstream timeout", 4)
+        add("INFO heartbeat ok", 150)
+        add("WARN queue backlog", 2)
+        add("CRITICAL disk failure")
+        add("DEBUG gc pass", 120)
+        path = fx.write_lines(self.dir, "app.log", lines)
+        rep = analyse(read_logs([path]))
+        self.assertEqual([(i.group.level, i.group.signature, i.group.count)
+                          for i in rep.incidents],
+                         [("ERROR", "ERROR upstream timeout", 4),
+                          ("WARNING", "WARN queue backlog", 2),
+                          ("ERROR", "CRITICAL disk failure", 1)])
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt):
+                _, out, _ = run([path, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                section = self._incident_section(out, fmt)
+                self.assertTrue(section.strip())
+                self.assertEqual(self._incident_count(section, fmt), 3, section)
+                for quiet in ("request served", "cache probe", "heartbeat ok", "gc pass"):
+                    self.assertNotIn(quiet, section)
+                    self.assertIn(quiet, out)            # still in the groups table
+                self.assertIn("upstream timeout", section)
+                self.assertIn("disk failure", section)
+                self.assertNotIn("no warning or error groups", section)
+
+        quiet = fx.write_lines(self.dir, "quiet.log",
+                               [f"{iso(T0)} INFO fine", f"{iso(T0)} DEBUG probe"])
+        self.assertEqual(analyse(read_logs([quiet])).incidents, [])
+        for fmt in FORMATS:
+            with self.subTest(fmt=fmt, case="none"):
+                _, out, _ = run([quiet, "--format", fmt])
+                self.assertTrue(out.strip(), "report is empty")
+                section = self._incident_section(out, fmt)
+                self.assertIn("no warning or error groups", section)
+                self.assertEqual(self._incident_count(section, fmt), 0)
+                self.assertNotIn("fine", section)
 
     def test_context_default_zero_and_negative_refused(self):
         result = read_logs([self._log()])

@@ -84,7 +84,9 @@ Every report has the same sections in all three formats: a header (files and
 sizes, lines read, entries, untimed entries, invalid JSONL lines, replaced
 non-UTF-8 bytes, sampling, syslog year, bucket size, raw lines on/off,
 redaction on), a one-sentence summary, the groups table, the timeline,
-spikes, the incident view (top 5 groups) and, only with `--raw`, examples.
+spikes, the incident view (the top 5 WARNING+ groups by count; INFO and
+DEBUG groups appear only in the groups table) and, only with `--raw`,
+examples.
 Reports are reproducible: the same inputs and arguments (including `--year`)
 give byte-identical output; the current date or time never appears.
 

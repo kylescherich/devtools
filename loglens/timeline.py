@@ -107,17 +107,16 @@ def build_timeline(entries, spec=AUTO):
 
 
 def incidents(groups, sequence, *, context=0, raw=False):
-    """The top groups (already ordered by level rank, count, signature), each
-    with the signatures of the `context` entries around its first occurrence
-    in `sequence` (timeline order, untimed entries last)."""
-    top = groups[:TOP_GROUPS]
-    result = [Incident(g) for g in top]
-    if context <= 0 or not top:
+    """The top WARNING+ groups by count (ties: first occurrence, then
+    signature), each with the signatures of the `context` entries around its
+    first occurrence in `sequence` (timeline order, untimed entries last).
+    INFO and DEBUG groups never appear here."""
+    serious = [g for g in groups if LEVEL_RANK.get(g.level, 0) >= LEVEL_RANK[WARNING]]
+    top = sorted(serious, key=lambda g: (-g.count, g.first_index, g.signature))
+    result = [Incident(g) for g in top[:TOP_GROUPS]]
+    if context <= 0 or not result:
         return result
     signatures = [entry_signature(e) for e in sequence]
-    first_index = {}
-    for index, (entry, signature) in enumerate(zip(sequence, signatures)):
-        first_index.setdefault((entry.level, signature), index)
 
     def item(index):
         entry = sequence[index]
@@ -125,9 +124,7 @@ def incidents(groups, sequence, *, context=0, raw=False):
                             redact(entry.message) if raw else None)
 
     for incident in result:
-        index = first_index.get((incident.group.level, incident.group.signature))
-        if index is None:
-            continue
+        index = incident.group.first_index
         incident.before = [item(i) for i in range(max(0, index - context), index)]
         incident.after = [item(i) for i in
                           range(index + 1, min(len(sequence), index + 1 + context))]
