@@ -50,3 +50,13 @@ Run from the repo root:
 - No tailing, follow mode, watching or daemon. No network, no subprocess, never follow symlinks.
 - Standard library only; must run on Python 3.11 and 3.12. Test data is synthetic, generated at test time into temp dirs (`tests/loglens_fixtures.py`).
 - Commit messages and source files are pure ASCII; before every commit run both `python3 -m unittest discover` and `uv run --no-project --python 3.11 python -m unittest discover` and commit only if both print OK.
+
+## Git Archaeologist rules (gitarch, BRIEF-DEVWS-022)
+- gitarch runs only `git`, via `subprocess.run([...], shell=False)` with fixed argument lists, a per-call timeout (default 60 s, `--timeout`) and a per-call output cap of 100 MB (exceeded -> exit 3 "git output too large").
+- Environment: copy `os.environ`, delete every key starting with `GIT_`, then set `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`.
+- Every call starts: `git --no-pager -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c color.ui=false -c log.showSignature=false -C <repo> <subcommand> ...`
+- Every log/show/diff-tree call also carries `--no-ext-diff --no-textconv`. Never use `%G` format placeholders.
+- Allowed subcommands only: rev-parse, log, show, diff-tree, ls-files, cat-file, enforced by an allow-list inside the runner (anything else raises before running). Never status, checkout, fetch, pull, gc, blame.
+- User input: `--rev` must not start with `-` (usage error, exit 2) and is passed after `--end-of-options`; `--path` always after `--`.
+- Everything printed passes through `gitarch/_redact.py`, a byte-for-byte copy of `loglens/redact.py` (no import between packages; `test_redact_copy_identical` checks it).
+- Standard library only; Python 3.11 and 3.12; pure ASCII source and commit messages; both suites OK before every commit. Test repos are synthetic, built at test time in temp dirs by `tests/gitarch_fixtures.py`.
