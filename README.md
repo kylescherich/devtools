@@ -150,6 +150,11 @@ Details:
   (`db_pass=`, `dbPass=`, `X-Auth:`, `sas_sig=`, but not `bypass=`,
   `oauth_state=`, `design=`, `signal=`). Names that merely contain a word are
   redacted too, so `tokens: 5` becomes `tokens: <redacted>`.
+- Session material: names containing `csrf`, `xsrf` or `cookie`; `session`
+  and `sid` as the whole name or its last component (`session_id`,
+  `jsessionid`, `user_session`, `connect.sid`; not `session_count`,
+  `sessions`, `sidebar`). `Cookie:`, `Set-Cookie:` and `cookie=` values are
+  redacted to the end of the line.
 - Provider token shapes anywhere: AWS (`AKIA`/`ASIA`), Slack (`xox?-`),
   GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
   GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.

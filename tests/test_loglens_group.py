@@ -44,6 +44,8 @@ SECRET_CASES = [
     # M1.2 classes (BRIEF-DEVWS-021): one sentinel each.
     ("cobalt", "slack post xoxb-SNTslackCobalt-0123 ok", "SNTslackCobalt"),
     ("copper", "retry with Bearer SNTbareCopper42 now", "SNTbareCopper42"),
+    ("garnet", "request Cookie: theme=dark; app_state=SNTcookieGarnet; lang=en",
+     "SNTcookieGarnet"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]

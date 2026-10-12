@@ -22,22 +22,30 @@ REDACTED = "<redacted>"
 # refresh_token), or one of the short words as a whole component: bounded on
 # both sides by the identifier's start/end, a non-letter or a camelCase hump.
 # So db_pass=, X-Auth:, dbPass=, sas_sig= match; bypass=, oauth_state=,
-# design=, passenger=, authority=, signal= do not.
+# design=, passenger=, authority=, signal= do not. session and sid count only
+# as the whole name or its last component (user_session, connect.sid; not
+# session_count, sidebar); session_id, sessionid, jsessionid, PHPSESSID too.
 _ID = r"[A-Za-z0-9_.-]"
 _ID_START = r"(?<![A-Za-z0-9_.-])"
 _LONG = (r"(?:password|passwd|passphrase|secret|token|api[_-]?key|credential"
-         r"|private[_-]?key|access[_-]?key|account[_-]?key|signature)")
+         r"|private[_-]?key|access[_-]?key|account[_-]?key|signature"
+         r"|csrf|xsrf|cookie)")
 # Scoped case-sensitive: a lower-case letter directly before an upper-case one.
 _HUMP = r"(?-i:(?<=[a-z])(?=[A-Z]))"
 _LEFT = r"(?:(?<![A-Za-z])|" + _HUMP + r")"
 _RIGHT = r"(?:(?![A-Za-z])|" + _HUMP + r")"
 _SHORT = _LEFT + r"(?:pass|pwd|sig|auth)" + _RIGHT
-_KEYS = _ID_START + _ID + r"*?(?:" + _LONG + r"|" + _SHORT + r")" + _ID + r"*+"
+_LAST = (r"(?:" + _LEFT + r"(?:session|sid)|sess(?:ion)?[_-]?id)"
+         r"(?![A-Za-z0-9_.-])")
+_KEYS = (_ID_START + _ID + r"*?(?:(?:" + _LONG + r"|" + _SHORT + r")" + _ID + r"*+"
+         r"|" + _LAST + r")")
 # Values that say something about the secret rather than being it.
 _KEEP_WORDS = (r"(?:expired|invalid|missing|none|null|empty|true|false|present"
                r"|absent|revoked|ok)")
 _VALUE_END = r"(?:[\s,;&\"'}\]]|\Z)"
 _KEEP_VALUE = (r"(?![\"']?+" + _KEEP_WORDS + r"[\"']?+" + _VALUE_END + r")")
+# The same for values that run to the end of the line.
+_KEEP_LINE = r"(?!" + _KEEP_WORDS + r"[\"']?[ \t]*+(?:[\r\n]|\Z))"
 # The marker as reports print it: plain, or HTML-escaped in md/html output.
 _MARK = r"(?:<redacted>|&lt;redacted&gt;)"
 # Skip a value that already is just the marker, up to where the rule would
@@ -72,7 +80,12 @@ _RULES = [
                 re.DOTALL), REDACTED),
     # Authorization header value (any scheme), plain or quoted.
     (re.compile(r"(?i)(authorization[\"']?\s*+[:=]\s*+[\"']?+)" + _DONE_AUTH
-                + r"[^\"'\r\n]+"),
+                + _KEEP_LINE + r"[^\"'\r\n]+"),
+     r"\1" + REDACTED),
+    # Cookie: / Set-Cookie: / cookie= values run to the end of the line; a
+    # quoted value is left to the key rule below.
+    (re.compile(r"(?i)(" + _ID_START + r"(?:set-)?cookie[\"']?[ \t]*+[:=][ \t]*+)"
+                + _DONE_AUTH + _KEEP_LINE + r"(?=[^\"'\s])[^\r\n]+"),
      r"\1" + REDACTED),
     # "Basic <token>" / "Bearer <token>" anywhere; see _scheme_token.
     (re.compile(r"(?i)\b(?:basic|bearer)[ \t]++([A-Za-z0-9._~+/=-]+)"), _scheme_token),

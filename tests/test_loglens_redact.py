@@ -103,3 +103,41 @@ class TestCredentials(RedactTable):
             ("Bearer abc1", "Bearer abc1"),
             ("a basic setup", "a basic setup"),
         ])
+
+
+class TestSession(RedactTable):
+    def test_item2_session_material(self):
+        self.check_rows(ORDINARY + [
+            ("csrf=SNTb1 ok", f"csrf={R} ok"),
+            ("X-CSRF-Token: SNTb2", f"X-CSRF-Token: {R}"),
+            ("xsrf_token=SNTb3", f"xsrf_token={R}"),
+            ("XSRF-TOKEN=SNTb4;", f"XSRF-TOKEN={R};"),
+            ("csrfmiddlewaretoken=SNTb5", f"csrfmiddlewaretoken={R}"),
+            ("session=SNTb6 ok", f"session={R} ok"),
+            ("session_id=SNTb7 ok", f"session_id={R} ok"),
+            ("sessionid=SNTb8", f"sessionid={R}"),
+            ("JSESSIONID=SNTb9", f"JSESSIONID={R}"),
+            ("PHPSESSID=SNTb10", f"PHPSESSID={R}"),
+            ("user_session=SNTb11", f"user_session={R}"),
+            ("userSession: SNTb12", f"userSession: {R}"),
+            ("connect.sid=SNTb13", f"connect.sid={R}"),
+            ("sid=SNTb14", f"sid={R}"),
+            ("x_sid=SNTb15", f"x_sid={R}"),
+            ('{"session_id": "SNT b16"}', f'{{"session_id": "{R}"}}'),
+            ("refresh_token=SNTb17", f"refresh_token={R}"),
+            ("client_secret: SNTb18", f"client_secret: {R}"),
+            ("auth_cookie=SNTb19 ok", f"auth_cookie={R} ok"),
+            ("Cookie: theme=dark; sessionid=SNTb20; lang=en",
+             f"Cookie: {R}"),
+            ("Set-Cookie: JSESSIONID=SNTb21; Path=/; HttpOnly", f"Set-Cookie: {R}"),
+            ("req cookie=a=1&b=SNTb22 x", f"req cookie={R}"),
+            ('{"cookie": "a=SNTb23; b=2", "n": 1}', f'{{"cookie": "{R}", "n": 1}}'),
+            ("Cookie: a=SNTb24\nnext line", f"Cookie: {R}\nnext line"),
+            ("Cookie: none", "Cookie: none"),
+            ("session_count=5", "session_count=5"),
+            ("sessions=12", "sessions=12"),
+            ("inside=3", "inside=3"),
+            ("sidebar=1", "sidebar=1"),
+            ("possession=1", "possession=1"),
+            ("session ended", "session ended"),
+        ])
