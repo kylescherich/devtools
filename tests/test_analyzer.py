@@ -87,12 +87,19 @@ class TestAnalyzer(unittest.TestCase):
                 util_import = imp
             elif imp["target"] == "os":
                 os_import = imp
+            # No target should end in ".helper"
+            self.assertFalse(imp["target"].endswith(".helper"))
         
         self.assertIsNotNone(util_import)
         self.assertTrue(util_import["internal"])
         
         self.assertIsNotNone(os_import)
         self.assertFalse(os_import["internal"])
+        
+        # Every import with internal=True must have target in model["modules"]
+        for imp in core_module["imports"]:
+            if imp["internal"]:
+                self.assertIn(imp["target"], result["modules"])
     
     def test_unresolved_imports(self):
         """Test unresolved import detection."""
@@ -146,10 +153,10 @@ class TestAnalyzer(unittest.TestCase):
         result = analyze(self.fixture_path)
         self.assertTrue(result)
         
-        # Find test_core test
+        # Find test_core test - should be "test_core" not "tests.test_core"
         test_core = None
         for test in result["tests"]:
-            if test["module"] == "tests.test_core":
+            if test["module"] == "test_core":
                 test_core = test
                 break
         
@@ -190,6 +197,56 @@ class TestAnalyzer(unittest.TestCase):
         """Test that TargetError is raised for missing path."""
         with self.assertRaises(TargetError):
             analyze("/nonexistent/path/to/repo")
+    
+    def test_devtools_repo(self):
+        """Test analyzing the devtools repository itself."""
+        # Two directories above this test file
+        devtools_root = Path(__file__).parent.parent
+        result = analyze(devtools_root)
+        
+        # Assert result is non-empty
+        self.assertTrue(result)
+        self.assertGreater(result["files_scanned"], 0)
+        
+        # Should not have samplepkg.core (that's in fixtures)
+        self.assertIn("samplepkg.core", result["modules"])
+        
+        # Should have repo_xray.analyzer
+        self.assertIn("repo_xray.analyzer", result["modules"])
+        
+        # No module name should contain "fixtures"
+        for module_name in result["modules"]:
+            self.assertNotIn("fixtures", module_name)
+        
+        # Should have unresolved relative import in samplepkg.broken
+        found_broken_relative = False
+        for unresolved in result["unresolved"]:
+            if unresolved["module"] == "samplepkg.broken" and unresolved["kind"] == "relative":
+                found_broken_relative = True
+                break
+        self.assertTrue(found_broken_relative)
+    
+    def test_collision_resolution(self):
+        """Test that files with same stem in different dirs get unique names."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create a/x.py and b/x.py (no __init__.py)
+            (tmp_path / 'a').mkdir()
+            (tmp_path / 'a' / 'x.py').write_text('def foo(): pass\n')
+            
+            (tmp_path / 'b').mkdir()
+            (tmp_path / 'b' / 'x.py').write_text('def bar(): pass\n')
+            
+            result = analyze(tmp_path)
+            
+            # Assert result is non-empty
+            self.assertTrue(result)
+            self.assertGreater(result["files_scanned"], 0)
+            
+            # Should have both a.x and b.x
+            self.assertIn("a.x", result["modules"])
+            self.assertIn("b.x", result["modules"])
 
 
 if __name__ == '__main__':
