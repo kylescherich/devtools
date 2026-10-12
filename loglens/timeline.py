@@ -8,7 +8,6 @@ groups).
 from dataclasses import dataclass, field
 from statistics import median
 
-from loglens.group import entry_signature
 from loglens.readers import ERROR, LEVEL_RANK, WARNING, UsageError
 from loglens.redact import redact
 
@@ -138,17 +137,17 @@ def build_timeline(entries, spec=AUTO):
     return Timeline(name, size, buckets, *detect_spikes(buckets), outliers=outliers)
 
 
-def incidents(groups, sequence, *, context=0, raw=False):
+def incidents(groups, sequence, signatures, *, context=0, raw=False):
     """The top WARNING+ groups by count (ties: first occurrence, then
     signature), each with the signatures of the `context` entries around its
     first occurrence in `sequence` (timeline order, untimed entries last).
-    INFO and DEBUG groups never appear here."""
+    `signatures` are the ones group_entries computed for `sequence`; nothing
+    is recomputed here. INFO and DEBUG groups never appear here."""
     serious = [g for g in groups if LEVEL_RANK.get(g.level, 0) >= LEVEL_RANK[WARNING]]
     top = sorted(serious, key=lambda g: (-g.count, g.first_index, g.signature))
     result = [Incident(g) for g in top[:TOP_GROUPS]]
     if context <= 0 or not result:
         return result
-    signatures = [entry_signature(e) for e in sequence]
 
     def item(index):
         entry = sequence[index]

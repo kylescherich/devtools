@@ -157,9 +157,10 @@ def build_report(result, groups, timeline, incidents, *, raw=False, context=0,
 def analyse(result, *, raw=False, bucket=AUTO, context=0):
     """ReadResult -> Report: groups, timeline, spikes and incident view."""
     sequence = result.entries + result.untimed
-    groups = group_entries(sequence, keep_examples=raw)
+    signatures = []
+    groups = group_entries(sequence, keep_examples=raw, signatures=signatures)
     timeline = build_timeline(result.entries, bucket)
-    view = incidents(groups, sequence, context=context, raw=raw)
+    view = incidents(groups, sequence, signatures, context=context, raw=raw)
     return build_report(result, groups, timeline, view, raw=raw, context=context,
                         bucket_spec=bucket)
 

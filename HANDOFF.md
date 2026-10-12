@@ -1,15 +1,19 @@
 # HANDOFF — devtools
 
-## Status: Log Lens milestone 1 (branch devtools/loglens-m1, no PR yet)
+## Status: Log Lens M1.1 (BRIEF-DEVWS-020 / DEC-186, branch devtools/loglens-m1-1, no PR yet)
+- Items 1-5 done, one commit each: incident view = top 5 WARNING+ groups by count (ties: first occurrence, then signature; "no warning or error groups" when none); timeline outliers (> 30 days from the median) left off the timeline and listed under a new "warnings" section; explicit --bucket over 2000 buckets -> exit 2 naming the smallest fit; runs of >= 5 empty buckets collapsed (HTML gained a bucket table for this); literal backslashes doubled in text/md; syslog "host app[pid]:" / "host app:" parsed out before grouping, hosts/apps shown in the incident view; signatures computed once in grouping and reused for --context.
+- Tests: 332 in total, 92 loglens; both interpreters OK.
+
+### Next (Log Lens)
+- Kyle opens the PR devtools/loglens-m1-1 -> main.
+
+## Status: Log Lens milestone 1 (merged as PR #6)
 - Tasks 1-5 done, plus fixes A-C: stricter level detection (UPPERCASE, [..]/<..>, level=/lvl=/severity=, or first word + ':'), `--format` renamed to `--input-format`, pure-ASCII sources.
 - `loglens FILE... [--format text|md|html] [--output PATH [--force]] [--bucket ...] [--context N] [--raw]`. Exit 0 / 1 WARNING / 4 ERROR+ / 2 usage / 3 input; precedence 2 > 3 > 4 > 1 > 0 (table in --help and README).
 - Modules: readers (text/JSONL/gz, guards), redact (the one redact()), group (signatures), timeline (buckets, spikes median + 3*max(MAD,1) from >= 10 buckets, incident view), report (one model, three renderers, per-format escape), cli (output guards: O_EXCL|O_NOFOLLOW or O_TRUNC|O_NOFOLLOW, never an input's directory).
 - redact() skips a label followed by just the marker (plain or `&lt;redacted&gt;`), so the final pass over md/html never yields a raw `<redacted>` tag or eats table cells; a marker in the input never shields a secret (tested).
 - Tests: 321 in total, 81 loglens (`python3 -m unittest discover` and `uv run --no-project --python 3.11 python -m unittest discover`, both OK). Includes privacy and escaping across all formats with and without --raw, byte-identical reruns, output guards incl. symlinks, sha256 of inputs unchanged, gz + multi-file merge. Mutation spot-checks (escape steps, O_NOFOLLOW, directory guard, --force guard, exit 4) each fail tests.
-
-### Next (Log Lens)
-- Kyle opens the PR devtools/loglens-m1 -> main.
-- Known nits: an explicit small --bucket over a long span (or a bogus far-past JSONL timestamp under auto, which falls back to 1d) gives very long timelines; no cap yet. Text format does not escape backslashes, so a literal "\x1b" in a log looks like an escaped control.
+- Known nits (fixed in M1.1): long timelines from a small --bucket or a far-past timestamp; ambiguous backslashes in text output.
 
 ## Status (BRIEF-DEVWS-015, branch devtools/repo-xray-mvp)
 - Tasks 1–5 done. `repo-xray <path> --output <file> [--format html|md] [--max-files N]`; exit 0 ok, 2 usage (incl. output inside target), 3 target unreadable/too large.

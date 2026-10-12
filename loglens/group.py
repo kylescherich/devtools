@@ -91,22 +91,23 @@ class Group:
 
 
 def _redacted_signature(entry):
+    """(redacted message, redacted continuation, signature): the one place an
+    entry's signature is computed."""
     message = redact(entry.message)
     continuation = redact_lines(entry.continuation_lines)
     return message, continuation, traceback_signature(continuation) or normalise(message)
 
 
-def entry_signature(entry):
-    """The signature an entry is grouped under (computed from redacted text)."""
-    return _redacted_signature(entry)[2]
-
-
-def group_entries(entries, *, keep_examples=False):
+def group_entries(entries, *, keep_examples=False, signatures=None):
     """Group entries by (level, signature). Messages are redacted before
-    normalising; examples are kept only when keep_examples is set."""
+    normalising; examples are kept only when keep_examples is set. If
+    `signatures` is a list, each entry's signature is appended to it in
+    order, for reuse (the incident context) without a second pass."""
     groups = {}
     for index, entry in enumerate(entries):
         message, continuation, signature = _redacted_signature(entry)
+        if signatures is not None:
+            signatures.append(signature)
         key = (entry.level, signature)
         group = groups.get(key)
         if group is None:

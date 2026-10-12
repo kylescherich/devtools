@@ -5,6 +5,9 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 
+from unittest import mock
+
+import loglens.group
 from loglens.cli import main
 from loglens.readers import ERROR, WARNING, Entry, read_logs
 from loglens.redact import REDACTED, redact
@@ -429,6 +432,20 @@ class TestIncidents(ReportTestCase):
                 self.assertIn("no warning or error groups", section)
                 self.assertEqual(self._incident_count(section, fmt), 0)
                 self.assertNotIn("fine", section)
+
+    def test_context_signature_computed_once(self):
+        path = self._log()
+        lines = path.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(lines)
+        real = loglens.group._redacted_signature
+        with mock.patch.object(loglens.group, "_redacted_signature",
+                               side_effect=real) as spy:
+            code, out, _ = run([path, "--context", "3"])
+        self.assertTrue(out.strip(), "report is empty")
+        self.assertEqual(code, 4)
+        self.assertIn("before (3):", out)                   # context was built
+        self.assertEqual(spy.call_count, len(lines))
+        self.assertEqual(len({id(c.args[0]) for c in spy.call_args_list}), len(lines))
 
     def test_context_default_zero_and_negative_refused(self):
         result = read_logs([self._log()])
