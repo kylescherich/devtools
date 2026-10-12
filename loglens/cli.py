@@ -1,8 +1,11 @@
 import argparse
 import sys
 
+from loglens.group import group_entries
 from loglens.readers import (DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, InputError,
                              UsageError, read_logs)
+from loglens.redact import redact
+from loglens.report import render_text
 
 EXIT_OK = 0
 EXIT_USAGE = 2
@@ -26,6 +29,10 @@ class _ArgError(Exception):
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
         raise _ArgError(message)
+
+    def _print_message(self, message, file=None):
+        if message:
+            _write(file or sys.stderr, message)
 
 
 def _build_parser():
@@ -55,8 +62,8 @@ def _build_parser():
 
 
 def _write(stream, text):
-    """The single exit point for everything loglens prints."""
-    stream.write(text)
+    """The single exit point for everything loglens prints; always redacted."""
+    stream.write(redact(text))
 
 
 def _fail(message, code):
@@ -80,10 +87,6 @@ def main(argv=None):
         return _fail(str(exc), EXIT_USAGE)
     except InputError as exc:
         return _fail(str(exc), EXIT_INPUT)
-    summary = (f"{len(result.entries) + len(result.untimed)} entries "
-               f"({len(result.untimed)} without timestamp) from "
-               f"{len(result.files)} file(s), {result.lines_read} lines\n")
-    if result.sampled:
-        summary += result.sampled_note + "\n"
-    _write(sys.stdout, summary)
+    groups = group_entries(result.entries + result.untimed, keep_examples=args.raw)
+    _write(sys.stdout, render_text(groups, result, raw=args.raw))
     return EXIT_OK
