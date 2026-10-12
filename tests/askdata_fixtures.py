@@ -126,3 +126,141 @@ def mixed_csv(directory, int_share):
                 f.write(f"word_{i}\n")
     
     return path
+
+
+def fk_db(directory):
+    """Create a SQLite database with foreign keys, indexes, and a view.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    from datetime import date, timedelta
+    
+    directory = Path(directory)
+    path = directory / "fk.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Create customers table
+    conn.execute("""
+        CREATE TABLE customers (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            email TEXT
+        )
+    """)
+    
+    # Insert 50 customers
+    for i in range(50):
+        conn.execute(
+            "INSERT INTO customers (name, email) VALUES (?, ?)",
+            (f"Customer {i}", f"customer{i}@example.com")
+        )
+    
+    # Create orders table with foreign key
+    conn.execute("""
+        CREATE TABLE orders (
+            id INTEGER PRIMARY KEY,
+            customer_id INTEGER REFERENCES customers(id),
+            amount REAL,
+            placed TEXT
+        )
+    """)
+    
+    # Create index
+    conn.execute("CREATE INDEX idx_orders_customer ON orders(customer_id)")
+    
+    # Insert 300 orders with dates spread across 2024
+    start_date = date(2024, 1, 1)
+    for i in range(300):
+        customer_id = i % 50
+        amount = 10.0 + (i * 1.5) % 100
+        days_offset = (i * 365) // 300
+        order_date = start_date + timedelta(days=days_offset)
+        
+        conn.execute(
+            "INSERT INTO orders (customer_id, amount, placed) VALUES (?, ?, ?)",
+            (customer_id, amount, order_date.isoformat())
+        )
+    
+    # Create view
+    conn.execute("""
+        CREATE VIEW big_orders AS
+        SELECT * FROM orders WHERE amount > 50
+    """)
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def empty_db(directory):
+    """Create a valid SQLite database with no tables.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "empty.db"
+    
+    conn = sqlite3.connect(str(path))
+    conn.execute("PRAGMA user_version=1")
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def hostile_db(directory):
+    """Create a SQLite database with hostile names and values.
+    
+    Returns path to the created file.
+    """
+    import sqlite3
+    
+    directory = Path(directory)
+    path = directory / "hostile.db"
+    
+    conn = sqlite3.connect(str(path))
+    
+    # Table with quotes and HTML in name
+    table_name = 't"<script>'
+    col_name = 'c"<b>'
+    
+    conn.execute(f'CREATE TABLE "{table_name}" ("{col_name}" TEXT)')
+    
+    # Insert hostile values
+    conn.execute(
+        f'INSERT INTO "{table_name}" ("{col_name}") VALUES (?)',
+        ('<img src=x onerror=alert(1)>',)
+    )
+    conn.execute(
+        f'INSERT INTO "{table_name}" ("{col_name}") VALUES (?)',
+        ('normal value',)
+    )
+    conn.execute(
+        f'INSERT INTO "{table_name}" ("{col_name}") VALUES (?)',
+        ('<script>alert("xss")</script>',)
+    )
+    
+    conn.commit()
+    conn.close()
+    
+    return path
+
+
+def not_a_db(directory):
+    """Create a text file with .db extension.
+    
+    Returns path to the created file.
+    """
+    directory = Path(directory)
+    path = directory / "fake.db"
+    
+    with open(path, 'w', encoding='utf-8') as f:
+        f.write("This is not a SQLite database.\n")
+        f.write("Just a plain text file.\n")
+    
+    return path
