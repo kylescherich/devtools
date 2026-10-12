@@ -239,3 +239,36 @@ class TestMultiWord(RedactTable):
             ("password is incorrect", f"password is {R}"),   # accepted over-redaction
             ("password reset requested", "password reset requested"),
         ])
+
+
+class TestPreservation(RedactTable):
+    def test_item5_preservation(self):
+        keep_words = ("expired invalid missing none null empty true false present "
+                      "absent revoked ok").split()
+        self.check_rows(ORDINARY + [
+            # URL userinfo only when it holds a password; never taken for an e-mail
+            ("ssh://git@host.example.test/r.git", "ssh://git@host.example.test/r.git"),
+            ("ssh://git@host.example.test:22/r.git", "ssh://git@host.example.test:22/r.git"),
+            ("https://deploy.bot@host.example.test/x", "https://deploy.bot@host.example.test/x"),
+            ("https://u:SNTe1@db.example.test/x", f"https://{R}@db.example.test/x"),
+            ("postgres://app:SNTe2@ss@10.0.0.5:5432/db", f"postgres://{R}@10.0.0.5:5432/db"),
+            ("redis://:SNTe3@cache.example.test:6379", f"redis://{R}@cache.example.test:6379"),
+            # keep-words, any key-based rule, case-insensitive
+            *[(f"token={w}", f"token={w}") for w in keep_words],
+            ("csrf=missing", "csrf=missing"),
+            ("TOKEN=EXPIRED user=bob", "TOKEN=EXPIRED user=bob"),
+            ('{"token": "expired"}', '{"token": "expired"}'),
+            ("password=none", "password=none"),
+            ("session_id=null ok", "session_id=null ok"),
+            ("phone=absent", "phone=absent"),
+            ("Authorization: missing", "Authorization: missing"),
+            ("Cookie: empty", "Cookie: empty"),
+            ("password is revoked", "password is revoked"),
+            ("token=expired2", f"token={R}"),
+            ("token=okay", f"token={R}"),
+            ("password=missing secret", f"password={R}"),
+            # accepted over-redaction (DEC-183) and service identities
+            ("auth: login ok", f"auth: {R} ok"),
+            ("svc-deploy@proj.iam.example.test denied", "<email> denied"),
+            ("mailto:ops@example.test", "mailto:<email>"),
+        ])

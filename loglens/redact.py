@@ -172,12 +172,15 @@ _RULES = [
                 + r"(?:(?P<q2>\")(?:[^\"\\\r\n]|\\.)*\"|(?P<q1>')(?:[^'\\\r\n]|\\.)*'"
                 r"|[^\s,;&\"'}\]]+)"),
      _keep_quotes),
-    # URL userinfo (any scheme): scheme://user:secret@host -> scheme://<redacted>@host.
-    # Runs before the e-mail rule so "user:secret@host" is not taken for an address.
-    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)(?!" + _MARK + r"@)[^\s/?#\"'<>]+@"),
+    # URL userinfo with a password (any scheme): scheme://user:secret@host ->
+    # scheme://<redacted>@host; ssh://git@host stays. Runs before the e-mail
+    # rule so "user:secret@host" is not taken for an address.
+    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)(?!" + _MARK + r"@)"
+                r"(?=[^\s/?#\"'<>:@]*+:)[^\s/?#\"'<>]+@"),
      r"\1" + REDACTED + "@"),
-    # E-mail addresses, so they are gone with --raw too.
-    (re.compile(r"\b[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"), "<email>"),
+    # E-mail addresses, so they are gone with --raw too; not URL userinfo.
+    (re.compile(r"(?<![\w.+-])(?<!://)[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"),
+     "<email>"),
     (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{10,}"), REDACTED),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{10,}"), REDACTED),

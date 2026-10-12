@@ -173,6 +173,17 @@ Details:
   `hotel=`, `hotel_id=`, `telemetry=`, `automobile=`). Privacy over noise:
   `phone_count=` and `mobile_app_version=` are redacted too. There is no
   free-text phone, name or address detection.
+- URL userinfo is redacted only when it contains `:` (a password):
+  `https://u:pw@host` becomes `https://<redacted>@host`, while
+  `ssh://git@host.example.test/r.git` stays unchanged (the e-mail rule does
+  not fire on URL userinfo).
+- Keep-words: a key-based rule keeps a value that is exactly one of
+  `expired`, `invalid`, `missing`, `none`, `null`, `empty`, `true`, `false`,
+  `present`, `absent`, `revoked`, `ok` (any case), so `token=expired` and
+  `csrf=missing` stay readable.
+- Accepted over-redaction: `auth: login ok` becomes `auth: <redacted> ok`
+  (DEC-183), and e-mail-like service identities
+  (`svc-deploy@proj.iam.example.test`) become `<email>` like any address.
 - Provider token shapes anywhere: AWS (`AKIA`/`ASIA`), Slack (`xox?-`),
   GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
   GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.
