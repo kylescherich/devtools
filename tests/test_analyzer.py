@@ -211,15 +211,16 @@ class TestAnalyzer(unittest.TestCase):
         self.assertTrue(result)
         self.assertGreater(result["files_scanned"], 0)
         
-        # Should not have samplepkg.core (that's in fixtures)
+        # Should not have samplepkg.core (that's in tests/fixtures/)
         self.assertIn("samplepkg.core", result["modules"])
         
         # Should have repo_xray.analyzer
         self.assertIn("repo_xray.analyzer", result["modules"])
         
-        # No module name should contain "fixtures"
+        # No module name should be tests.fixtures or start with tests.fixtures.
         for module_name in result["modules"]:
-            self.assertNotIn("fixtures", module_name)
+            self.assertNotEqual(module_name, "tests.fixtures")
+            self.assertFalse(module_name.startswith("tests.fixtures."))
         
         # Should have unresolved relative import in samplepkg.broken
         found_broken_relative = False

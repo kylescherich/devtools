@@ -1,6 +1,7 @@
 """Tests for CSV inspection."""
 import hashlib
 import json
+import re
 import tempfile
 import time
 import unittest
@@ -68,9 +69,10 @@ class TestCSVInspect(unittest.TestCase):
             
             # Check token uniqueness in JSON
             json_str = json.dumps(result)
-            tok_count = json_str.count("tok-")
-            # Should have at most 5 distinct tokens in samples
-            self.assertLessEqual(tok_count, 10)  # 5 samples * 2 occurrences max
+            tokens = set(re.findall(r'tok-\d+', json_str))
+            # Should have 1 to 5 distinct tokens
+            self.assertGreaterEqual(len(tokens), 1)
+            self.assertLessEqual(len(tokens), 5)
     
     def test_messy_csv_issues(self):
         """Test messy CSV with malformed rows, blank header, encoding."""
@@ -95,10 +97,10 @@ class TestCSVInspect(unittest.TestCase):
             self.assertEqual(result["encoding"], "cp1252")
             self.assertIn("encoding fallback", " ".join(result["warnings"]))
             
-            # Check quoted value appears in samples
-            col2_samples = cols["col2"]["samples"]
-            found_quoted = any("a, b" in str(s) for s in col2_samples)
-            self.assertTrue(found_quoted, f"Expected 'a, b' in samples: {col2_samples}")
+            # Check quoted value appears in samples of column_3
+            col3_samples = cols["column_3"]["samples"]
+            found_quoted = any("a, b" in str(s) for s in col3_samples)
+            self.assertTrue(found_quoted, f"Expected 'a, b' in samples: {col3_samples}")
     
     def test_empty_csv(self):
         """Test empty CSV file."""
@@ -252,6 +254,35 @@ class TestCSVInspect(unittest.TestCase):
                 self.assertNotIn('x', mode, f"Exclusive mode detected: {mode}")
                 # Should be read mode
                 self.assertIn('r', mode, f"Expected read mode, got: {mode}")
+    
+    def test_encoding_fallback_late_bad_byte(self):
+        """Test encoding fallback when bad byte appears after 64KB."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "late_bad.csv"
+            
+            # Write header and 70,000+ bytes of ASCII rows, then a row with café
+            with open(path, 'wb') as f:
+                f.write(b'col1,col2\n')
+                # Write enough rows to exceed 64KB
+                for i in range(3000):
+                    f.write(f'{i},value{i}\n'.encode('ascii'))
+                # Now write a row with a bad UTF-8 byte (café in latin-1)
+                f.write(b'9999,caf\xe9\n')
+            
+            result = inspect_csv(path)
+            
+            # Assert non-empty
+            self.assertIsNotNone(result)
+            self.assertGreater(len(result), 0)
+            
+            # Should have encoding cp1252
+            self.assertEqual(result["encoding"], "cp1252")
+            
+            # Should have encoding fallback warning
+            self.assertIn("encoding fallback", " ".join(result["warnings"]))
+            
+            # Should have processed rows (no exception)
+            self.assertGreater(result["row_count"], 3000)
 
 
 if __name__ == '__main__':

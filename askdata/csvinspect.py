@@ -1,6 +1,7 @@
 """CSV file inspection and analysis."""
 import csv
 import os
+import re
 import time
 from collections import Counter
 from datetime import date, datetime
@@ -23,22 +24,33 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
     """
     path = Path(path)
     size_bytes = path.stat().st_size
-    warnings = []
     
-    # Check size guard
-    if size_bytes > max_bytes:
-        warnings.append(f"sampled: first {max_rows} rows only")
-    
-    # Try UTF-8 first, fallback to cp1252
+    # Try UTF-8 first, fallback to cp1252 on any UnicodeDecodeError
     encoding = "utf-8"
     try:
-        with open(path, 'r', encoding='utf-8-sig', newline='') as f:
-            sample = f.read(65536)
+        return _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline)
     except UnicodeDecodeError:
         encoding = "cp1252"
+        return _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline, 
+                                         encoding_fallback=True)
+
+
+def _inspect_csv_with_encoding(path, size_bytes, encoding, max_bytes, max_rows, deadline, encoding_fallback=False):
+    """Internal function to inspect CSV with a specific encoding."""
+    warnings = []
+    
+    if encoding_fallback:
         warnings.append("encoding fallback: UTF-8 failed, read as cp1252")
-        with open(path, 'r', encoding='cp1252', newline='') as f:
-            sample = f.read(65536)
+    
+    # Check size guard
+    size_warning_added = False
+    if size_bytes > max_bytes:
+        warnings.append(f"sampled: first {max_rows} rows only")
+        size_warning_added = True
+    
+    # Read sample for dialect detection
+    with open(path, 'r', encoding=encoding if encoding == 'cp1252' else 'utf-8-sig', newline='') as f:
+        sample = f.read(65536)
     
     # Detect dialect
     delimiter = ','
@@ -58,7 +70,7 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
             warnings.append("header uncertain")
     
     # Process the file
-    with open(path, 'r', encoding=encoding, newline='') as f:
+    with open(path, 'r', encoding=encoding if encoding == 'cp1252' else 'utf-8-sig', newline='') as f:
         reader = csv.reader(f, delimiter=delimiter)
         
         # Read header
@@ -103,9 +115,9 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
         columns_data = {
             name: {
                 "name": name,
-                "values": [],
+                "non_missing": 0,
                 "missing": 0,
-                "distinct_values": set(),
+                "value_counter": Counter(),
                 "distinct_exact": True,
                 "bool_count": 0,
                 "int_count": 0,
@@ -121,30 +133,36 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
         malformed_count = 0
         malformed_lines = []
         row_count = 0
-        csv_line = 2  # Line 1 is header
+        timed_out = False
+        row_limited = False
+        
+        # Check deadline before first row
+        if deadline is not None and time.monotonic() >= deadline:
+            timed_out = True
         
         for row in reader:
-            # Check deadline every 10,000 rows
-            if row_count > 0 and row_count % 10000 == 0:
+            # Check deadline every 10,000 rows (including 0)
+            if not timed_out and row_count % 10000 == 0:
                 if deadline is not None and time.monotonic() >= deadline:
+                    timed_out = True
                     warnings.append(f"timeout after {row_count} rows; statistics are partial")
                     break
             
-            # Check max_rows
+            # Check max_rows - if we've hit the limit, check if there's another row
             if row_count >= max_rows:
-                warnings.append(f"sampled: first {max_rows} rows only")
+                row_limited = True
+                if not size_warning_added:
+                    warnings.append(f"sampled: first {max_rows} rows only")
                 break
             
             # Check for malformed rows
             if len(row) != num_cols:
                 malformed_count += 1
                 if len(malformed_lines) < 3:
-                    malformed_lines.append(csv_line)
-                csv_line += 1
+                    malformed_lines.append(reader.line_num)
                 continue
             
             row_count += 1
-            csv_line += 1
             
             # Process each column value
             for col_name, value in zip(header, row):
@@ -155,12 +173,12 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
                     col_data["missing"] += 1
                     continue
                 
-                col_data["values"].append(value)
+                col_data["non_missing"] += 1
                 
-                # Track distinct values
+                # Track distinct values with Counter
                 if col_data["distinct_exact"]:
-                    if len(col_data["distinct_values"]) < 100000:
-                        col_data["distinct_values"].add(value)
+                    if len(col_data["value_counter"]) < 100000:
+                        col_data["value_counter"][value] += 1
                     else:
                         col_data["distinct_exact"] = False
                         if "distinct counts sampled" not in warnings:
@@ -171,10 +189,10 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
                     col_data["samples"].append(value[:80])
                 
                 # Type detection
-                _test_types(value, col_data)
+                _test_types(value.strip(), col_data)
         
         # Check if we sampled
-        sampled = row_count >= max_rows or (deadline is not None and time.monotonic() >= deadline)
+        sampled = timed_out or row_limited
         
         # Add malformed warning
         if malformed_count > 0:
@@ -206,13 +224,18 @@ def inspect_csv(path, max_bytes=500_000_000, max_rows=1_000_000, deadline=None):
 
 
 def _test_types(value, col_data):
-    """Test value against different types and update counts."""
+    """Test value against different types and update counts.
+    
+    Args:
+        value: The stripped value to test
+        col_data: Column data dictionary to update
+    """
     # Bool test
     if value.lower() in ('true', 'false', 'yes', 'no'):
         col_data["bool_count"] += 1
     
-    # Int test
-    if value.lstrip('+-').isdigit():
+    # Int test - use regex for exact match
+    if re.fullmatch(r'[+-]?\d+', value, re.ASCII):
         col_data["int_count"] += 1
         try:
             col_data["numeric_values"].append(float(value))
@@ -224,9 +247,7 @@ def _test_types(value, col_data):
         f = float(value)
         if not (f != f or f == float('inf') or f == float('-inf')):  # finite check
             col_data["float_count"] += 1
-            if value.lstrip('+-').isdigit():
-                pass  # Already added as int
-            else:
+            if not re.fullmatch(r'[+-]?\d+', value, re.ASCII):
                 col_data["numeric_values"].append(f)
     except ValueError:
         pass
@@ -282,7 +303,7 @@ def _parse_date(value):
 
 def _analyze_column(col_data, total_rows, warnings):
     """Analyze column data and determine final type and statistics."""
-    non_missing = len(col_data["values"])
+    non_missing = col_data["non_missing"]
     
     if non_missing == 0:
         return {
@@ -312,10 +333,10 @@ def _analyze_column(col_data, total_rows, warnings):
     candidate_type, share = best_type
     share = round(share, 3)
     
-    # Determine final type
+    # Determine final type and candidate
     if share >= 0.95:
         final_type = candidate_type
-        candidate = None
+        candidate = candidate_type
     elif share >= 0.5:
         final_type = "mixed"
         candidate = candidate_type
@@ -346,12 +367,11 @@ def _analyze_column(col_data, total_rows, warnings):
             }
     
     # Calculate top values
+    distinct = len(col_data["value_counter"]) if col_data["distinct_exact"] else len(col_data["value_counter"])
     top = None
-    distinct = len(col_data["distinct_values"]) if col_data["distinct_exact"] else None
-    if (col_data["distinct_exact"] and distinct is not None and distinct <= 50 and 
+    if (col_data["distinct_exact"] and distinct <= 50 and 
         final_type in ("text", "bool", "mixed")):
-        counter = Counter(col_data["values"])
-        top = [[value, count] for value, count in counter.most_common(10)]
+        top = [[value, count] for value, count in col_data["value_counter"].most_common(10)]
     
     return {
         "name": col_data["name"],
@@ -359,7 +379,7 @@ def _analyze_column(col_data, total_rows, warnings):
         "candidate": candidate,
         "share": share,
         "missing": col_data["missing"],
-        "distinct": distinct if col_data["distinct_exact"] else len(col_data["distinct_values"]),
+        "distinct": distinct,
         "distinct_exact": col_data["distinct_exact"],
         "samples": col_data["samples"],
         "numeric": numeric,
