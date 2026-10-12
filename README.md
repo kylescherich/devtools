@@ -110,9 +110,8 @@ give byte-identical output; the current date or time never appears.
   signatures: messages with numbers, IDs, IPs, paths, URLs, e-mails and quoted
   strings replaced by placeholders such as `<n>` and `<path>`.
 - Everything printed or written passes through one redaction function, with no
-  way to turn it off: bearer/Authorization values, password/secret/token/API-key
-  values, GitHub/`sk-`/AWS keys, JWTs, PEM blocks and 16-digit card numbers
-  become `<redacted>`, also under `--raw`.
+  way to turn it off (the report header always says `redaction: on`); it also
+  applies under `--raw`. See "What is redacted" below.
 - Control characters and bidi overrides in log text are shown as `\xNN` /
   `\uXXXX`; in text and Markdown a literal backslash from the log is shown
   doubled (`\\`), so a typed `\x1b` reads `\\x1b` and only a real control
@@ -123,6 +122,76 @@ give byte-identical output; the current date or time never appears.
   directory of any input file (so `loglens app.log --output report.txt` run
   next to `app.log` is refused; write elsewhere). No network, no subprocess,
   no tailing.
+
+### What is redacted (the privacy boundary)
+
+Log Lens redacts:
+
+- credentials and secrets: values of labelled keys, known provider token
+  shapes, auth headers, URL passwords, PEM blocks and JWTs;
+- session material: cookies, session ids, CSRF/refresh tokens, client secrets;
+- e-mail addresses;
+- payment card numbers (13-19 digits passing the Luhn check);
+- values of explicitly labelled personal fields (`phone`, `tel`, `mobile`,
+  `dob`, `birth_date`, `ssn`, `patient_id`, `member_id`, `customer_id`, `mrn`).
+
+It does **not** promise general PII redaction: free-text names and postal
+addresses are not detected. Do not run Log Lens on logs you would not show in
+a terminal.
+
+Details:
+
+- Keys (`key=v`, `key: v`, `"key": "v"`, `'key': 'v'`; case-insensitive) are
+  matched by name: any identifier containing `password`, `passwd`,
+  `passphrase`, `secret`, `token`, `api_key`/`apikey`, `credential`,
+  `private_key`, `access_key`, `account_key` or `signature`
+  (`AWS_SECRET_ACCESS_KEY=`, `refresh_token=`, `AccountKey=`). The short
+  words `pass`, `pwd`, `sig` and `auth` count only as a whole name component
+  (`db_pass=`, `dbPass=`, `X-Auth:`, `sas_sig=`, but not `bypass=`,
+  `oauth_state=`, `design=`, `signal=`). Names that merely contain a word are
+  redacted too, so `tokens: 5` becomes `tokens: <redacted>`.
+- Multi-word values: for names containing `password`, `passwd`,
+  `passphrase`, `secret` or `credential`, and for the personal fields, an
+  unquoted value runs to the end of the line or to the next ` key=`,
+  `, key=`, `; key=` or `&key=` field: `password=a b c user=bob` becomes
+  `password=<redacted> user=bob`. Spoken forms `password is X`, `password was
+  X`, `passphrase is X`, `credentials were X` redact the next word (also
+  "password is incorrect"; keep-words below stay).
+- Session material: names containing `csrf`, `xsrf` or `cookie`; `session`
+  and `sid` as the whole name or its last component (`session_id`,
+  `jsessionid`, `user_session`, `connect.sid`; not `session_count`,
+  `sessions`, `sidebar`). `Cookie:`, `Set-Cookie:` and `cookie=` values are
+  redacted to the end of the line.
+- Card numbers: 13-19 digits, as one run or in groups with one consistent
+  space or dash (4-4-4-4, 4-6-5, ...), first digit 2-6, passing the Luhn
+  check and not touching another digit or a letter. Other long numbers
+  (ids, epoch-millisecond timestamps) are kept.
+- Labelled personal fields: `phone`, `tel`, `mobile`, `dob`, `birth_date`,
+  `ssn`, `patient_id`, `member_id`, `customer_id`, `mrn`, `telephone`,
+  `date_of_birth`, as a whole name component anywhere in the name
+  (`user_phone=`, `mobilePhone=`, `phone_number=`, `patient_id_hash=`; not
+  `hotel=`, `hotel_id=`, `telemetry=`, `automobile=`). Privacy over noise:
+  `phone_count=` and `mobile_app_version=` are redacted too. There is no
+  free-text phone, name or address detection.
+- URL userinfo is redacted only when it contains `:` (a password):
+  `https://u:pw@host` becomes `https://<redacted>@host`, while
+  `ssh://git@host.example.test/r.git` stays unchanged (the e-mail rule does
+  not fire on URL userinfo).
+- Keep-words: a key-based rule keeps a value that is exactly one of
+  `expired`, `invalid`, `missing`, `none`, `null`, `empty`, `true`, `false`,
+  `present`, `absent`, `revoked`, `ok` (any case), so `token=expired` and
+  `csrf=missing` stay readable.
+- Accepted over-redaction: `auth: login ok` becomes `auth: <redacted> ok`
+  (DEC-183), and e-mail-like service identities
+  (`svc-deploy@proj.iam.example.test`) become `<email>` like any address.
+- Provider token shapes anywhere: AWS (`AKIA`/`ASIA`), Slack (`xox?-`),
+  GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
+  GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.
+- `Basic <token>` / `Bearer <token>` anywhere, when the token looks like one
+  (16+ characters, or 8+ with a digit, `+`, `/`, `=` or an inner capital), so
+  "Basic authentication failed" stays; a word that does not qualify is
+  skipped, never consumed ("basic Basic <token>" is caught); the whole
+  `Authorization:` value always.
 
 ## Exit codes
 

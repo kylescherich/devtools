@@ -1,5 +1,12 @@
 # HANDOFF — devtools
 
+## Status: Log Lens M1.2 (BRIEF-DEVWS-021 / DEC-189, branch devtools/loglens-m1-2, no PR)
+- Items 0-5 done, one commit each: privacy boundary in README + redact.py docstring; name-contains keys (pass/pwd/sig/auth as whole components), provider shapes, bare Basic/Bearer; session material (csrf/xsrf/cookie, session/sid last component, Cookie headers to end of line); Luhn-checked cards (13-19 digits) and labelled personal fields (whole component anywhere); multi-word values and spoken forms; URL userinfo only with ":", keep-words, documented over-redaction.
+- Tests: 339 in total (was 332); both interpreters OK. Mutations (Luhn removed, exact keys, multi-word extent removed) each fail tests.
+
+### Next (Log Lens)
+- Kyle reviews devtools/loglens-m1-2 and opens the PR.
+
 ## Status: Log Lens M1.1 (BRIEF-DEVWS-020 / DEC-186, branch devtools/loglens-m1-1, no PR yet)
 - Items 1-5 done, one commit each: incident view = top 5 WARNING+ groups by count (ties: first occurrence, then signature; "no warning or error groups" when none); timeline outliers (> 30 days from the median) left off the timeline and listed under a new "warnings" section; explicit --bucket over 2000 buckets -> exit 2 naming the smallest fit; runs of >= 5 empty buckets collapsed (HTML gained a bucket table for this); literal backslashes doubled in text/md; syslog "host app[pid]:" / "host app:" parsed out before grouping, hosts/apps shown in the incident view; signatures computed once in grouping and reused for --context.
 - Tests: 332 in total, 92 loglens; both interpreters OK.

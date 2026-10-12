@@ -33,7 +33,7 @@ SECRET_CASES = [
     ("papa", "inline -----BEGIN PRIVATE KEY-----SNTpemPapa-----END PRIVATE KEY-----",
      "SNTpemPapa"),
     ("quebec", "card 4111111111111111 charged", "4111111111111111"),
-    ("romeo", "card 4000 1234 5678 9010 charged", "4000 1234 5678 9010"),
+    ("romeo", "card 4000 0566 5566 5556 charged", "4000 0566 5566 5556"),
     ("sierra", "card 5500-0000-0000-0004 charged", "5500-0000-0000-0004"),
     ("victor", "db login pass=SNTpass1 ok", "SNTpass1"),
     ("whiskey", "db login pwd=SNTpwd2 ok", "SNTpwd2"),
@@ -41,6 +41,17 @@ SECRET_CASES = [
     ("yankee", 'payload {"credential": "SNTcred4"} sent', "SNTcred4"),
     ("zulu", "proxy auth=SNTauth5 ok", "SNTauth5"),
     ("amber", "mail sent to sntmail6@example.test ok", "sntmail6"),
+    # M1.2 classes (BRIEF-DEVWS-021): one sentinel each.
+    ("cobalt", "slack post xoxb-SNTslackCobalt-0123 ok", "SNTslackCobalt"),
+    ("copper", "retry with Bearer SNTbareCopper42 now", "SNTbareCopper42"),
+    ("garnet", "request Cookie: theme=dark; app_state=SNTcookieGarnet; lang=en",
+     "SNTcookieGarnet"),
+    ("jade", "card 3782-822463-10005 declined", "822463"),
+    ("onyx", "callback phone=+1-555-SNTphoneOnyx ok", "SNTphoneOnyx"),
+    ("ruby", "login password=correct horse SNTmwRuby staple", "SNTmwRuby"),
+    ("topaz", "user said password is SNTspokenTopaz today", "SNTspokenTopaz"),
+    # DEC-190: a declined scheme word must not hide the real token.
+    ("quartz", "sent basic Basic SNTbasicQuartz== ok", "SNTbasicQuartz"),
 ]
 PEM_SPLIT = ["-----BEGIN RSA PRIVATE KEY-----", "SNTpemSplitTango0123",
              "SNTpemSplitTango4567", "-----END RSA PRIVATE KEY-----"]
@@ -228,7 +239,8 @@ class TestRedaction(GroupTestCase):
             "{'pass': 'SNTd'}": f"{{'pass': '{REDACTED}'}}",
             "PASS=SNTe": f"PASS={REDACTED}",
             "passphrase: SNTf": f"passphrase: {REDACTED}",
-            "credentials=SNTg;": f"credentials={REDACTED};",
+            # multi-word value: runs to the end of the line (DEC-189 item 4)
+            "credentials=SNTg;": f"credentials={REDACTED}",
             "Credential = SNTh": f"Credential = {REDACTED}",
             "auth: login ok": f"auth: {REDACTED} ok",       # accepted over-redaction
         }
@@ -261,7 +273,8 @@ class TestRedaction(GroupTestCase):
         self.assertEqual(redact("x -----BEGIN PRIVATE KEY-----\nSNTabc"), f"x {REDACTED}")
 
     def test_ordinary_text_untouched(self):
-        text = "user 42 logged in from 10.0.0.1 after 1234 ms; tokens: 5"
+        # "tokens: 5" is redacted since keys match by name-contains (DEC-189).
+        text = "user 42 logged in from 10.0.0.1 after 1234 ms; retries: 5"
         self.assertEqual(redact(text), text)
 
 
