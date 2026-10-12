@@ -3,9 +3,12 @@
 import json
 import os
 import shutil
+import stat
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from repo_xray.analyzer import analyze, TargetError, TooManyFiles
 
@@ -291,6 +294,122 @@ class TestAnalyzer(unittest.TestCase):
             self.assertIsNotNone(found_import)
             self.assertEqual(found_import["target"], "pkg.a")
             self.assertTrue(found_import["internal"])
+    
+    def test_skipped_symlink_large_and_syntax_error(self):
+        """Test that symlinks, large files, and syntax errors are skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create pkg/__init__.py
+            pkg_dir = tmp_path / 'pkg'
+            pkg_dir.mkdir()
+            (pkg_dir / '__init__.py').write_text('')
+            
+            # Create pkg/ok.py
+            (pkg_dir / 'ok.py').write_text('def ok(): pass\n')
+            
+            # Create pkg/big.py (300 bytes of comments)
+            big_content = '# ' + 'x' * 297 + '\n'
+            (pkg_dir / 'big.py').write_text(big_content)
+            
+            # Create pkg/bad.py with syntax error
+            (pkg_dir / 'bad.py').write_text('def (:\n')
+            
+            # Try to create symlink (skip if not supported)
+            symlink_created = False
+            try:
+                link_file = pkg_dir / 'link.py'
+                os.symlink(pkg_dir / 'ok.py', link_file)
+                symlink_created = True
+            except (OSError, NotImplementedError):
+                pass
+            
+            # Spy on open() to track which files are opened
+            opened_files = []
+            original_open = open
+            
+            def spy_open(file, *args, **kwargs):
+                opened_files.append(str(file))
+                return original_open(file, *args, **kwargs)
+            
+            with patch('builtins.open', spy_open):
+                result = analyze(tmp_path, max_file_bytes=200)
+            
+            # Assert result is non-empty
+            self.assertTrue(result)
+            self.assertGreater(result["files_scanned"], 0)
+            
+            # Check skipped list
+            skipped_dict = {item['path']: item['reason'] for item in result['skipped']}
+            
+            self.assertIn('pkg/big.py', skipped_dict)
+            self.assertEqual(skipped_dict['pkg/big.py'], 'too_large')
+            
+            self.assertIn('pkg/bad.py', skipped_dict)
+            self.assertEqual(skipped_dict['pkg/bad.py'], 'syntax_error')
+            
+            if symlink_created:
+                self.assertIn('pkg/link.py', skipped_dict)
+                self.assertEqual(skipped_dict['pkg/link.py'], 'symlink')
+            
+            # Check modules
+            self.assertIn('pkg.ok', result['modules'])
+            self.assertNotIn('pkg.big', result['modules'])
+            self.assertNotIn('pkg.bad', result['modules'])
+            self.assertNotIn('pkg.link', result['modules'])
+            
+            # Check that big.py was never opened
+            big_py_path = str(pkg_dir / 'big.py')
+            self.assertNotIn(big_py_path, opened_files)
+    
+    def test_reparse_point_directory_skipped(self):
+        """Test that reparse point directories are skipped."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_path = Path(tmpdir)
+            
+            # Create pkg/__init__.py and pkg/ok.py
+            pkg_dir = tmp_path / 'pkg'
+            pkg_dir.mkdir()
+            (pkg_dir / '__init__.py').write_text('')
+            (pkg_dir / 'ok.py').write_text('def ok(): pass\n')
+            
+            # Create junc/x.py
+            junc_dir = tmp_path / 'junc'
+            junc_dir.mkdir()
+            (junc_dir / 'x.py').write_text('def x(): pass\n')
+            
+            # Mock os.lstat to return reparse point for "junc"
+            original_lstat = os.lstat
+            
+            def mock_lstat(path):
+                result = original_lstat(path)
+                if str(path).endswith('junc'):
+                    # Return a namespace with reparse point attribute
+                    return types.SimpleNamespace(
+                        st_mode=stat.S_IFDIR | 0o755,
+                        st_size=0,
+                        st_file_attributes=getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+                    )
+                return result
+            
+            with patch('repo_xray.analyzer.os.lstat', mock_lstat):
+                result = analyze(tmp_path)
+            
+            # Assert result is non-empty
+            self.assertTrue(result)
+            self.assertGreater(result["files_scanned"], 0)
+            
+            # Check that x and junc.x are not modules
+            self.assertNotIn('x', result['modules'])
+            self.assertNotIn('junc.x', result['modules'])
+            
+            # Check skipped list contains junc
+            skipped_dict = {item['path']: item['reason'] for item in result['skipped']}
+            self.assertIn('junc', skipped_dict)
+            self.assertEqual(skipped_dict['junc'], 'reparse_point')
+            
+            # Check pkg.ok is a module
+            self.assertIn('pkg.ok', result['modules'])
 
 
 if __name__ == '__main__':

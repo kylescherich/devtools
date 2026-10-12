@@ -296,6 +296,52 @@ class TestReport(unittest.TestCase):
         self.assertNotIn('1 modules', summary_text)
         self.assertNotIn('1 packages', summary_text)
         self.assertNotIn('1 classes', summary_text)
+    
+    def test_skipped_section_escaped(self):
+        """Test that skipped section properly escapes content."""
+        # Hand-built model with skipped entry containing HTML
+        model = {
+            'files_scanned': 1,
+            'packages': [],
+            'modules': {},
+            'entry_points': [],
+            'tests': [],
+            'unresolved': [],
+            'parse_errors': [],
+            'skipped': [
+                {
+                    'path': '<b>x.py',
+                    'reason': 'too_large'
+                }
+            ]
+        }
+        
+        # Test HTML rendering
+        html = render_html(model, "Test")
+        
+        # Assert non-empty
+        self.assertNotEqual(html, "")
+        
+        # Check for section header
+        self.assertIn("Skipped / not parsed", html)
+        
+        # Check for summary line
+        self.assertIn("1 file skipped", html)
+        
+        # Check for escaped content
+        self.assertIn("&lt;b&gt;x.py", html)
+        
+        # Check unescaped tag is NOT present
+        self.assertNotIn("<b>x.py", html)
+        
+        # Test Markdown rendering
+        md = render_markdown(model, "Test")
+        
+        # Assert non-empty
+        self.assertNotEqual(md, "")
+        
+        # Check for escaped content in Markdown
+        self.assertIn("&lt;b&gt;x.py", md)
 
 
 if __name__ == '__main__':

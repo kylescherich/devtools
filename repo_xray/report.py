@@ -456,6 +456,32 @@ def render_markdown(model, title):
         lines.append("None")
     lines.append("")
     
+    # Skipped / not parsed
+    lines.append("## Skipped / not parsed")
+    lines.append("")
+    
+    skipped = model.get('skipped', [])
+    if skipped:
+        # Count by reason
+        reason_counts = {}
+        for item in skipped:
+            reason = item['reason']
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        
+        # Build summary line
+        total = len(skipped)
+        file_word = "file" if total == 1 else "files"
+        count_parts = [f"{count} {reason}" for reason, count in sorted(reason_counts.items())]
+        lines.append(f"{total} {file_word} skipped: {', '.join(count_parts)}")
+        lines.append("")
+        
+        # List each entry
+        for item in skipped:
+            lines.append(f"- {_escape_markdown(item['reason'])}: {_escape_markdown(item['path'])}")
+    else:
+        lines.append("None")
+    lines.append("")
+    
     # Parse errors
     lines.append("## Parse errors")
     lines.append("")
@@ -641,6 +667,31 @@ def render_html(model, title):
                 parts.append(_escape_html(unres['detail']))
             parts.append(f'line {unres["lineno"]}')
             lines.append(f'<li>{", ".join(parts)}</li>')
+        lines.append('</ul>')
+    else:
+        lines.append('<p>None</p>')
+    
+    # Skipped / not parsed
+    lines.append('<h2>Skipped / not parsed</h2>')
+    
+    skipped = model.get('skipped', [])
+    if skipped:
+        # Count by reason
+        reason_counts = {}
+        for item in skipped:
+            reason = item['reason']
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        
+        # Build summary line
+        total = len(skipped)
+        file_word = "file" if total == 1 else "files"
+        count_parts = [f"{count} {reason}" for reason, count in sorted(reason_counts.items())]
+        lines.append(f'<p>{total} {file_word} skipped: {", ".join(count_parts)}</p>')
+        
+        # List each entry
+        lines.append('<ul>')
+        for item in skipped:
+            lines.append(f'<li>{_escape_html(item["reason"])}: {_escape_html(item["path"])}</li>')
         lines.append('</ul>')
     else:
         lines.append('<p>None</p>')
