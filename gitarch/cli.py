@@ -3,12 +3,11 @@ import argparse
 import sys
 
 from gitarch._redact import redact
+from gitarch.gitcmd import DEFAULT_TIMEOUT, Git, GitError, UsageError, check_rev
 
 EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_GIT = 3
-
-DEFAULT_TIMEOUT = 60
 
 EPILOG = """\
 exit codes:
@@ -81,7 +80,13 @@ def main(argv=None):
         return _fail(str(exc), EXIT_USAGE)
     except SystemExit as exc:          # --help
         return exc.code or EXIT_OK
-    if args.rev.startswith("-"):
-        return _fail(f"--rev must not start with '-': {args.rev}", EXIT_USAGE)
-    _write(sys.stdout, "gitarch: report not implemented yet\n")
+    try:
+        check_rev(args.rev)
+    except UsageError as exc:
+        return _fail(str(exc), EXIT_USAGE)
+    try:
+        sha = Git(args.repo, timeout=args.timeout).resolve(args.rev)
+    except GitError as exc:
+        return _fail(str(exc), EXIT_GIT)
+    _write(sys.stdout, f"gitarch: {args.rev} = {sha}; report not implemented yet\n")
     return EXIT_OK
