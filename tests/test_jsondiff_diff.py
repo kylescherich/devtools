@@ -152,6 +152,22 @@ class TestCategories(DiffTestCase):
         self.assertIn('["[]"]', self.only(result, "type changed"))
         self.assertEqual(self.changes(result, "array element shape changed"), [])
 
+    def test_value_to_null_only_is_became_nullable_only(self):
+        result = self.diff([{"a": "x"}, {"a": "y"}], [{"a": None}, {"a": None}],
+                           jsonl=True)
+        self.assertTrue(result["changes"])
+        self.assertEqual([(c["path"], c["category"], c["breaking"])
+                          for c in result["changes"]],
+                         [("a", "became nullable", True)])
+
+    def test_null_only_to_value_is_no_longer_nullable_only(self):
+        result = self.diff([{"a": None}, {"a": None}], [{"a": "x"}, {"a": "y"}],
+                           jsonl=True)
+        self.assertTrue(result["changes"])
+        self.assertEqual([(c["path"], c["category"], c["breaking"])
+                          for c in result["changes"]],
+                         [("a", "no longer nullable", False)])
+
     def test_breaking_flags_exactly_as_specified(self):
         result = self.diff(
             [{"keep": 1, "gone": 1, "retype": 1, "nul": 1, "unnul": None,

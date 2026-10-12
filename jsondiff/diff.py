@@ -40,7 +40,8 @@ def _compare(path, old, new):
     changes = []
     old_types = [t for t in old["types"] if t != "null"]
     new_types = [t for t in new["types"] if t != "null"]
-    if old_types != new_types:
+    # Null-only on either side is a nullability change, never a type change.
+    if old_types and new_types and old_types != new_types:
         changes.append(_change(path, TYPE_CHANGED,
                                f"{_type_list(old)} \u2192 {_type_list(new)}"))
     if not old["nullable"] and new["nullable"]:
