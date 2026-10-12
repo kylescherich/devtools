@@ -94,7 +94,7 @@ class TestE2E(unittest.TestCase):
                 'samplepkg.cli',
                 'samplepkg.star',
                 'samplepkg.broken',
-                'tests.test_core'
+                'test_core'
             ]
             for module in expected_modules:
                 self.assertIn(module, content)

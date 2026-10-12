@@ -358,20 +358,20 @@ def render_markdown(model, title):
             lines.append("")
         
         # Internal imports
-        internal_imports = [imp['target'] for imp in mod_info.get('imports', []) if imp.get('internal')]
+        internal_imports = sorted(set(imp['target'] for imp in mod_info.get('imports', []) if imp.get('internal')))
         if internal_imports:
             lines.append("**Internal imports:**")
             lines.append("")
-            for imp in sorted(internal_imports):
+            for imp in internal_imports:
                 lines.append(f"- {_escape_markdown(imp)}")
             lines.append("")
         
         # External imports
-        external_imports = [imp['target'] for imp in mod_info.get('imports', []) if not imp.get('internal')]
+        external_imports = sorted(set(imp['target'] for imp in mod_info.get('imports', []) if not imp.get('internal')))
         if external_imports:
             lines.append("**External imports:**")
             lines.append("")
-            for imp in sorted(external_imports):
+            for imp in external_imports:
                 lines.append(f"- {_escape_markdown(imp)}")
             lines.append("")
     
@@ -542,20 +542,20 @@ def render_html(model, title):
             lines.append('</ul>')
         
         # Internal imports
-        internal_imports = [imp['target'] for imp in mod_info.get('imports', []) if imp.get('internal')]
+        internal_imports = sorted(set(imp['target'] for imp in mod_info.get('imports', []) if imp.get('internal')))
         if internal_imports:
             lines.append('<p><strong>Internal imports:</strong></p>')
             lines.append('<ul>')
-            for imp in sorted(internal_imports):
+            for imp in internal_imports:
                 lines.append(f'<li>{_escape_html(imp)}</li>')
             lines.append('</ul>')
         
         # External imports
-        external_imports = [imp['target'] for imp in mod_info.get('imports', []) if not imp.get('internal')]
+        external_imports = sorted(set(imp['target'] for imp in mod_info.get('imports', []) if not imp.get('internal')))
         if external_imports:
             lines.append('<p><strong>External imports:</strong></p>')
             lines.append('<ul>')
-            for imp in sorted(external_imports):
+            for imp in external_imports:
                 lines.append(f'<li>{_escape_html(imp)}</li>')
             lines.append('</ul>')
     
