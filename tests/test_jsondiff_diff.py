@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 
+from jsondiff.cli import _exit_code
 from jsondiff.diff import UNKEYED_NOTE, diff_shapes
 from jsondiff.shape import UsageError, build_shape
 from tests import jsondiff_fixtures as fx
@@ -182,6 +183,24 @@ class TestCategories(DiffTestCase):
         self.assertEqual([(c["path"], c["category"], c["breaking"])
                           for c in result["changes"]],
                          [("a", "no longer nullable", False)])
+
+    def test_null_only_to_value_or_null_is_type_change_only(self):
+        result = self.diff([{"a": None}, {"a": None}], [{"a": "x"}, {"a": None}],
+                           jsonl=True)
+        self.assertTrue(result["changes"])
+        self.assertEqual([(c["path"], c["category"], c["detail"], c["breaking"])
+                          for c in result["changes"]],
+                         [("a", "type changed", "null only → string", False)])
+        self.assertEqual(_exit_code(result), 1)
+
+    def test_value_or_null_to_null_only_is_type_change_only(self):
+        result = self.diff([{"a": "x"}, {"a": None}], [{"a": None}, {"a": None}],
+                           jsonl=True)
+        self.assertTrue(result["changes"])
+        self.assertEqual([(c["path"], c["category"], c["detail"], c["breaking"])
+                          for c in result["changes"]],
+                         [("a", "type changed", "string → null only", False)])
+        self.assertEqual(_exit_code(result), 1)
 
     def test_breaking_flags_exactly_as_specified(self):
         result = self.diff(

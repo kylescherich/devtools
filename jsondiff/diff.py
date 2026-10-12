@@ -53,6 +53,13 @@ def _compare(path, old, new):
     if old_types and new_types and old_types != new_types:
         changes.append(_change(path, TYPE_CHANGED,
                                f"{_type_list(old)} \u2192 {_type_list(new)}"))
+    elif old_types != new_types and old["nullable"] and new["nullable"]:
+        # Null-only vs real types plus null: nullability is unchanged, so the
+        # type change is the only signal, and it is not breaking.
+        change = _change(path, TYPE_CHANGED,
+                         f"{_type_list(old)} \u2192 {_type_list(new)}")
+        change["breaking"] = False
+        changes.append(change)
     if not old["nullable"] and new["nullable"]:
         changes.append(_change(path, BECAME_NULLABLE, "null values now seen"))
     elif old["nullable"] and not new["nullable"]:
