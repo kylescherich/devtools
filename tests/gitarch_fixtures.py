@@ -140,3 +140,48 @@ def hostile_repo(directory):
                        ("log.showSignature", "true")):
         git(repo, "config", "--local", key, value)
     return repo, marker, script
+
+
+def append_config(repo, text, name="config"):
+    """Append raw text to .git/<name> (config or config.worktree)."""
+    with open(Path(repo) / ".git" / name, "a", encoding="utf-8") as f:
+        f.write(text)
+
+
+def trap_script(directory, name="trap.sh"):
+    """(script, marker): an executable that appends to marker when run."""
+    directory = Path(directory)
+    marker = directory / "MARKER"
+    script = directory / name
+    script.write_text(TRAP.format(marker=marker), encoding="ascii")
+    script.chmod(script.stat().st_mode | stat.S_IXUSR)
+    return script, marker
+
+
+def partial_clone_repo(directory):
+    """A repository configured as a partial clone whose promisor remote is an
+    ext:: URL running a trap script (protocol.ext.allow=always), with a
+    .promisor pack and one blob missing, so any lazy fetch runs the trap.
+    Returns (repo, marker, missing blob path)."""
+    repo = basic_repo(directory, "partial")
+    script, marker = trap_script(directory)
+    blob = head(repo, "HEAD:a.py")
+    (Path(repo) / ".git" / "objects" / blob[:2] / blob[2:]).unlink()
+    pack_dir = Path(repo) / ".git" / "objects" / "pack"
+    pack_dir.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "pack-0000000000000000000000000000000000000000.promisor").write_bytes(b"")
+    for key, value in (("core.repositoryformatversion", "1"),
+                       ("extensions.partialClone", "origin"),
+                       ("remote.origin.url", f"ext::{script} %S"),
+                       ("remote.origin.promisor", "true"),
+                       ("remote.origin.partialclonefilter", "blob:none"),
+                       ("protocol.ext.allow", "always")):
+        git(repo, "config", "--local", key, value)
+    return repo, marker, "a.py"
+
+
+def linked_worktree(repo, directory, name="wt"):
+    """A linked worktree of repo at directory/name on a new branch."""
+    path = Path(directory) / name
+    git(repo, "worktree", "add", "-q", "-b", f"{name}-branch", str(path))
+    return path

@@ -339,6 +339,8 @@ def build(git, rev="HEAD", *, path=None, recent_days=RECENT_DAYS, authors=False)
     data = git.run("log", "-z", "--raw", "--numstat", "-M", "--topo-order",
                    _FORMAT, *options, *rev_args(sha), *pathspec)
     commits = parse_log(data)[::-1]
+    if path is not None and not commits:
+        raise GitError(f"path not in history: {path}")
     files, deleted, touches = _track(commits)
     merges = sum(1 for c in commits if c.is_merge)
     overview = Overview(rev, sha, len(commits), merges, len(commits) - merges,

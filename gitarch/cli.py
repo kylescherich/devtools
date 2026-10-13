@@ -7,6 +7,7 @@ import sys
 from gitarch import history
 from gitarch._redact import redact
 from gitarch.gitcmd import DEFAULT_TIMEOUT, Git, GitError, UsageError, check_rev
+from gitarch.preflight import Refused
 from gitarch.report import FORMATS, Report, render
 
 EXIT_OK = 0
@@ -19,16 +20,25 @@ exit codes:
   0     ok
   2     usage error: unknown option, a --rev starting with "-", --diffs
         without --path, --force without --output, or a refused --output
-  3     git: not a git repository, no commits, unknown revision, git
-        missing, a git call timed out, or git output too large
+  3     git: not a git repository, no commits, unknown revision, a --path
+        not in history, git missing or found inside the repository or the
+        current directory, a git call timed out, or git output too large; or a
+        repository outside gitarch's boundary (refused before any git call)
+
+gitarch reads one ordinary repository: its work tree and its own .git
+directory. It refuses bare repositories, partial clones, alternates, config
+includes, gitdir pointers and symlinked git dirs; a linked worktree only
+with --allow-linked-worktree.
 
 --output never overwrites an existing file unless --force is given, never
 writes through a symlink, and refuses any place inside the analysed
 repository (its work tree or its .git directory).
 
 gitarch only reads: it runs git (rev-parse, log, show, diff-tree, ls-files,
-cat-file) with hooks, pagers, external diffs, textconv and signature checks
-switched off, and everything it prints passes through redaction.
+cat-file, plus "git --version" for the header) by absolute path, with hooks,
+pagers, external diffs, textconv, attributes files, lazy fetching and
+signature checks switched off and pathspecs taken literally; everything it
+prints passes through redaction.
 """
 
 
@@ -92,6 +102,9 @@ def _build_parser():
                              "inside the repository")
     parser.add_argument("--force", action="store_true",
                         help="allow --output to replace an existing regular file")
+    parser.add_argument("--allow-linked-worktree", action="store_true",
+                        help="accept a linked worktree (its common directory joins "
+                             "the scope)")
     parser.add_argument("--timeout", type=_positive, default=DEFAULT_TIMEOUT,
                         metavar="SECONDS",
                         help=f"per git call timeout (default: {DEFAULT_TIMEOUT})")
@@ -121,26 +134,12 @@ def _check_output(path, force):
     return None
 
 
-def _inside(path, root):
-    try:
-        return os.path.commonpath([path, root]) == root
-    except ValueError:              # different drives
-        return False
-
-
-def _check_not_in_repo(path, git):
+def _check_not_in_repo(path, scope):
     """Refusal message when PATH would land in the repository's work tree,
-    .git directory or common git directory."""
-    target = os.path.join(os.path.realpath(os.path.dirname(os.path.abspath(path))),
-                          os.path.basename(os.path.abspath(path)))
-    roots = []
-    for args in (("--absolute-git-dir",), ("--git-common-dir",), ("--show-toplevel",)):
-        out = git.run("rev-parse", *args, ok=(0, 128)).decode("utf-8", "replace").strip()
-        if out:
-            roots.append(os.path.realpath(os.path.join(git.repo, out)))
-    for root in roots:
-        if _inside(target, root):
-            return f"--output {path}: refusing to write inside the analysed repository"
+    git directory or, for a linked worktree, the common directory and the
+    main work tree that holds it (Scope.output_roots)."""
+    if scope.inside(path, scope.output_roots):
+        return f"--output {path}: refusing to write inside the analysed repository"
     return None
 
 
@@ -177,19 +176,27 @@ def main(argv=None):
         refusal = _check_output(args.output, args.force)
         if refusal:
             return _fail(refusal, EXIT_USAGE)
-    git = Git(args.repo, timeout=args.timeout)
+    try:
+        git = Git(args.repo, timeout=args.timeout,
+                  allow_linked=args.allow_linked_worktree)
+    except Refused as exc:
+        return _fail(f"refused: {exc}", EXIT_GIT)
+    except GitError as exc:
+        return _fail(str(exc), EXIT_GIT)
+    refusal = _check_not_in_repo(args.output, git.scope) if args.output else None
+    if refusal:
+        return _fail(refusal, EXIT_USAGE)
     try:
         model = history.build(git, args.rev, path=args.path, recent_days=args.recent,
                               authors=args.authors)
-        refusal = _check_not_in_repo(args.output, git) if args.output else None
-        if refusal:
-            return _fail(refusal, EXIT_USAGE)
         subjects = history.subjects(git, model) if args.messages else {}
         diffs = history.diffs(git, model) if args.diffs else None
+        version = git.version()
     except GitError as exc:
         return _fail(str(exc), EXIT_GIT)
     name = os.path.basename(os.path.abspath(args.repo)) or "/"
-    document = render(Report(name, model, args.messages, diffs, subjects), args.format)
+    document = render(Report(name, model, args.messages, diffs, subjects, version),
+                      args.format)
     if not args.output:
         _write(sys.stdout, document)
         return EXIT_OK

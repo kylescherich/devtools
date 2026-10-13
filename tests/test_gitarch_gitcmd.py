@@ -3,7 +3,9 @@ import contextlib
 import io
 import os
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -11,11 +13,27 @@ from unittest import mock
 import gitarch.gitcmd
 from gitarch import history
 from gitarch.cli import EXIT_GIT, EXIT_USAGE, main
-from gitarch.gitcmd import (ALLOWED, CONFIG, GIT_ENV, CommandRefused, Git, GitError,
-                            UsageError, rev_args)
+from gitarch.gitcmd import (ALLOWED, CommandRefused, Git, GitError, UsageError,
+                            resolve_git, rev_args)
+from gitarch.preflight import find_repo
 from tests import gitarch_fixtures as fx
 
-REAL_RUN = subprocess.run
+REAL_POPEN = subprocess.Popen
+
+# Literal expectations, written out here on purpose: the tests must not take
+# them from gitcmd's own constants, so dropping one there fails a test.
+EXPECTED_FLAGS = ["--no-pager", "--literal-pathspecs",
+                  "-c", "core.hooksPath=/dev/null",
+                  "-c", "core.fsmonitor=false",
+                  "-c", "core.pager=cat",
+                  "-c", "color.ui=false",
+                  "-c", "log.showSignature=false",
+                  "-c", "core.attributesFile=/dev/null"]
+EXPECTED_DIFF_FLAGS = ["--no-ext-diff", "--no-textconv"]
+EXPECTED_ENV = {"GIT_NO_LAZY_FETCH": "1", "GIT_LITERAL_PATHSPECS": "1",
+                "GIT_ATTR_NOSYSTEM": "1", "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_TERMINAL_PROMPT": "0",
+                "GIT_OPTIONAL_LOCKS": "0", "LC_ALL": "C"}
 
 
 def run_cli(argv):
@@ -27,21 +45,21 @@ def run_cli(argv):
 
 @contextlib.contextmanager
 def spy():
-    """Record every subprocess.run call gitarch makes, still running it."""
+    """Record every process gitarch starts (subprocess.Popen), still running it."""
     calls = []
 
     def recorder(argv, *args, **kwargs):
         calls.append((list(argv), kwargs))
-        return REAL_RUN(argv, *args, **kwargs)
-    with mock.patch.object(gitarch.gitcmd.subprocess, "run", side_effect=recorder):
+        return REAL_POPEN(argv, *args, **kwargs)
+    with mock.patch.object(gitarch.gitcmd.subprocess, "Popen", side_effect=recorder):
         yield calls
 
 
 def prefix(repo):
-    argv = ["git", "--no-pager"]
-    for setting in CONFIG:
-        argv += ["-c", setting]
-    return argv + ["-C", str(repo)]
+    """Absolute git, EXPECTED_FLAGS in order, -C <work tree>."""
+    executable = resolve_git(find_repo(repo))
+    assert os.path.isabs(executable)
+    return [executable, *EXPECTED_FLAGS, "-C", os.path.realpath(repo)]
 
 
 class GitTestCase(unittest.TestCase):
@@ -56,9 +74,24 @@ class GitTestCase(unittest.TestCase):
 class TestRunner(GitTestCase):
     def test_env_cleared(self):
         repo = fx.basic_repo(self.dir)
-        hostile = {"GIT_DIR": str(self.dir / "nowhere"), "GIT_EXEC_PATH": str(self.dir / "x"),
-                   "GIT_CONFIG_PARAMETERS": "'core.pager=evil'", "GIT_WORK_TREE": "/"}
-        with mock.patch.dict(os.environ, hostile), spy() as calls:
+        # Dangerous GIT_* keys in the parent: all must be absent, except
+        # GIT_DIR / GIT_WORK_TREE, which must carry our values instead.
+        hostile = {"GIT_DIR": str(self.dir / "nowhere"), "GIT_WORK_TREE": "/",
+                   "GIT_EXEC_PATH": str(self.dir / "x"),
+                   "GIT_CONFIG_PARAMETERS": "'core.pager=evil'",
+                   "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "core.pager",
+                   "GIT_CONFIG_VALUE_0": "evil", "GIT_CONFIG": str(self.dir / "cfg"),
+                   "GIT_INDEX_FILE": str(self.dir / "index"),
+                   "GIT_OBJECT_DIRECTORY": str(self.dir / "objects"),
+                   "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(self.dir / "alt"),
+                   "GIT_COMMON_DIR": str(self.dir / "common"),
+                   "GIT_CEILING_DIRECTORIES": "/", "GIT_SSH_COMMAND": "evil",
+                   "GIT_ASKPASS": "evil", "GIT_EXTERNAL_DIFF": "evil", "GIT_PAGER": "evil",
+                   "GIT_TRACE": str(self.dir / "trace"), "GIT_NAMESPACE": "evil"}
+        # Every key we set, given a wrong value in the parent: ours must win.
+        overridden = {key: "evil" for key in EXPECTED_ENV}
+        self.assertTrue(set(hostile).isdisjoint(EXPECTED_ENV))
+        with mock.patch.dict(os.environ, {**hostile, **overridden}), spy() as calls:
             sha = Git(repo).resolve("HEAD")
         self.assertEqual(sha, fx.head(repo))
         self.assertTrue(calls)
@@ -66,15 +99,19 @@ class TestRunner(GitTestCase):
             env = kwargs["env"]
             self.assertTrue(env)
             for key in hostile:
+                if key in ("GIT_DIR", "GIT_WORK_TREE"):
+                    continue
                 self.assertNotIn(key, env)
-            self.assertEqual([k for k in env if k.startswith("GIT_")
-                              and k not in GIT_ENV], [])
-            for key, value in GIT_ENV.items():
-                self.assertEqual(env[key], value)
-            self.assertEqual(env["GIT_CONFIG_GLOBAL"], "/dev/null")
-            self.assertEqual(env["LC_ALL"], "C")
+            # The parent's bogus GIT_DIR / GIT_WORK_TREE never win: ours do.
+            self.assertEqual(env["GIT_DIR"], os.path.realpath(repo / ".git"))
+            self.assertEqual(env["GIT_WORK_TREE"], os.path.realpath(repo))
+            self.assertEqual(sorted(k for k in env if k.startswith("GIT_")),
+                             sorted([k for k in EXPECTED_ENV if k.startswith("GIT_")]
+                                    + ["GIT_DIR", "GIT_WORK_TREE"]))
+            for key, value in EXPECTED_ENV.items():
+                self.assertEqual(env.get(key), value, key)
             self.assertIs(kwargs["shell"], False)
-            self.assertIn("timeout", kwargs)
+            self.assertIs(kwargs["start_new_session"], True)
 
     def test_mandatory_flags_every_call(self):
         repo = fx.basic_repo(self.dir)
@@ -96,7 +133,7 @@ class TestRunner(GitTestCase):
             self.assertIn(sub, ALLOWED)
             if sub in ("log", "show", "diff-tree"):
                 self.assertEqual(argv[len(head) + 1:len(head) + 3],
-                                 ["--no-ext-diff", "--no-textconv"], argv)
+                                 EXPECTED_DIFF_FLAGS, argv)
             self.assertFalse(any("%G" in a for a in argv))
             self.assertIs(kwargs["shell"], False)
             self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
@@ -123,18 +160,24 @@ class TestRunner(GitTestCase):
 
 class TestCliExit3(GitTestCase):
     def test_timeout_exit_3(self):
+        """--timeout reaches the runner: git is swapped for a process that
+        sleeps (started with git's exact Popen arguments); the CLI exits 3."""
         repo = fx.basic_repo(self.dir)
         seen = []
 
         def slow(argv, *args, **kwargs):
-            seen.append(kwargs.get("timeout"))
-            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
-        with mock.patch.object(gitarch.gitcmd.subprocess, "run", side_effect=slow):
-            code, out, err = run_cli([repo, "--timeout", "7"])
+            seen.append(kwargs)
+            return REAL_POPEN([sys.executable, "-c", "import time; time.sleep(30)"],
+                              *args, **kwargs)
+        start = time.monotonic()
+        with mock.patch.object(gitarch.gitcmd.subprocess, "Popen", side_effect=slow):
+            code, out, err = run_cli([repo, "--timeout", "0.5"])
+        self.assertLess(time.monotonic() - start, 10)
         self.assertEqual(code, EXIT_GIT)
         self.assertTrue(err)
-        self.assertIn("timed out after 7 s", err)
-        self.assertEqual(seen, [7])
+        self.assertIn("git timed out after 0.5 s", err)
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0]["start_new_session"], True)
         self.assertEqual(out, "")
 
     def test_not_a_repo_exit_3(self):

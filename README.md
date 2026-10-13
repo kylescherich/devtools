@@ -247,19 +247,62 @@ time never appears.
 
 - gitarch only reads. The only program it starts is `git`, without a shell,
   with a fixed list of arguments, and only these read-only subcommands:
-  `rev-parse`, `log`, `show`, `diff-tree`, `ls-files`, `cat-file`.
+  `rev-parse`, `log`, `show`, `diff-tree`, `ls-files`, `cat-file`. The one
+  documented exception is `git --version` (exactly that, with the same
+  environment, timeout and output cap), run once for the report header's
+  `git:` line.
+- git is found once, on the absolute entries of PATH only (`.`, empty and
+  relative entries are ignored), and always called by that absolute path.
+  gitarch refuses (exit 3) a git that resolves inside the repository or
+  whose directory is the current directory.
 - A repository cannot make gitarch run its programs: hooks, the pager,
   fsmonitor, external diff drivers, textconv filters and signature checks
   (and so `gpg.program`) are switched off on every call, your global and
-  system git config are ignored, and any `GIT_*` environment variable is
+  system git config and the system attributes file are ignored
+  (`core.attributesFile=/dev/null`), lazy fetching from promisor remotes
+  is off (`GIT_NO_LAZY_FETCH=1`), and any `GIT_*` environment variable is
   removed before git starts.
-- Each git call has a timeout (60 s, `--timeout`) and an output cap of
-  100 MB.
+- Paths are taken literally (`--literal-pathspecs`): `--path ':!x'` or
+  `--path ':(attr:foo)x.py'` names a file called exactly that, and a
+  `--path` that matches nothing in the history is exit 3 "path not in
+  history".
+- Each git call has a timeout (60 s, `--timeout`) and hard output limits
+  (100 MB on stdout, 1 MB on stderr), read as a stream so nothing beyond
+  the limit is kept. git runs in its own process group; a timeout or an
+  output limit kills the whole group, including any child it started
+  (SIGTERM, then SIGKILL after 2 s), and gitarch exits 3 ("git timed out"
+  or "output limit").
 - `--rev` may not start with `-`, and git always reads it as a revision,
   never as an option; `--path` is always passed as a path.
 - `--output` never writes inside the analysed repository (work tree or
   `.git`), never through a symlink, and never over an existing file unless
-  you pass `--force`.
+  you pass `--force`. For a linked worktree it also refuses the common
+  directory and the main work tree that holds it.
+
+## Repository boundary
+
+gitarch reads one ordinary repository: its working tree and its own .git
+directory. It refuses (exit 3, clear message, before any git call) anything
+that would make git read or write elsewhere or reach the network. Linked
+worktrees are allowed only with --allow-linked-worktree, which adds the
+resolved common directory to scope and nothing else.
+
+M1.1 refuses partial clones, alternates, includes, gitdir pointers and
+symlinked git dirs.
+
+These checks run in pure Python before any git process starts: bare
+repositories; a symlinked repository path, `.git`, or `HEAD`, `config`,
+`refs`, `packed-refs`, `objects`, `info`, `commondir`, `objects/info` or
+`objects/pack`; a `.git` file unless `--allow-linked-worktree` and it is a
+genuine linked worktree; a `commondir` file in an ordinary repository;
+non-empty `objects/info/alternates` or `http-alternates`; `.promisor` packs;
+and in the repository config (and `config.worktree` with
+`extensions.worktreeConfig`) any `[include]` or `[includeIf]` section,
+`core.attributesFile`, `core.worktree`, `extensions.partialClone`,
+`remote.*.promisor`, `remote.*.partialCloneFilter`, `mailmap.file` or
+`mailmap.blob`. The config is read by a strict reader: anything it cannot
+read without guessing is refused. Every git call then gets an explicit
+`GIT_DIR` and `GIT_WORK_TREE`.
 
 ## Privacy defaults
 
@@ -281,4 +324,4 @@ time never appears.
 | --- | --- |
 | 0 | ok |
 | 2 | usage error: unknown option, a `--rev` starting with `-`, `--diffs` without `--path`, `--force` without `--output`, or a refused `--output` |
-| 3 | git: not a git repository, no commits, unknown revision, git missing, a git call timed out, or git output too large |
+| 3 | git: not a git repository, no commits, unknown revision, a `--path` not in history, git missing or found inside the repository or the current directory, a git call timed out, git output too large, or a repository outside the boundary (refused before any git call) |
