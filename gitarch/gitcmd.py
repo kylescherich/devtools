@@ -9,8 +9,9 @@ Every call is subprocess.run([...], shell=False) with a fixed argument list:
 Only the subcommands in ALLOWED run; anything else raises CommandRefused
 before a process starts. log, show and diff-tree always get --no-ext-diff
 --no-textconv, inserted here so no caller can forget them. The environment is
-a copy of os.environ without any GIT_* key, plus the settings in GIT_ENV. Each
-call has a timeout and an output cap; both end in GitError (exit 3).
+a copy of os.environ without any GIT_* key, plus the settings in GIT_ENV and
+an explicit GIT_DIR and GIT_WORK_TREE from the preflight Scope. Each call has
+a timeout and an output cap; both end in GitError (exit 3).
 
 Repository boundary:
 gitarch reads one ordinary repository: its working tree and its own .git
@@ -26,6 +27,8 @@ import os
 import signal
 import subprocess
 import tempfile
+
+from gitarch.preflight import Scope, find_repo
 
 try:
     import resource
@@ -57,9 +60,14 @@ class CommandRefused(Exception):
     """A subcommand outside ALLOWED; raised before any process starts."""
 
 
-def git_env():
+def git_env(scope=None):
+    """os.environ without any GIT_* key, plus GIT_ENV and, for a Scope, the
+    explicit GIT_DIR and GIT_WORK_TREE (set after the clear, so ours win)."""
     env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     env.update(GIT_ENV)
+    if scope is not None:
+        env["GIT_DIR"] = scope.git_dir
+        env["GIT_WORK_TREE"] = scope.work_tree
     return env
 
 
@@ -102,10 +110,15 @@ def _first_line(data):
 
 
 class Git:
-    """One repository, one timeout, one output cap for every call."""
+    """One repository, one timeout, one output cap for every call. A path is
+    checked by preflight.find_repo() first (Refused, before any process);
+    every call then runs in the Scope's work tree with its GIT_DIR."""
 
-    def __init__(self, repo, *, timeout=DEFAULT_TIMEOUT, max_output=MAX_OUTPUT):
-        self.repo = str(repo)
+    def __init__(self, repo, *, timeout=DEFAULT_TIMEOUT, max_output=MAX_OUTPUT,
+                 allow_linked=False):
+        self.scope = repo if isinstance(repo, Scope) else find_repo(
+            repo, allow_linked=allow_linked)
+        self.repo = self.scope.work_tree
         self.timeout = timeout
         self.max_output = max_output
 
@@ -114,7 +127,7 @@ class Git:
         argv = build_argv(self.repo, subcommand, args)
         with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
             try:
-                proc = subprocess.run(argv, shell=False, env=git_env(),
+                proc = subprocess.run(argv, shell=False, env=git_env(self.scope),
                                       stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                       timeout=self.timeout,
                                       preexec_fn=_limit_output(self.max_output))

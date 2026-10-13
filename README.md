@@ -259,7 +259,8 @@ time never appears.
   never as an option; `--path` is always passed as a path.
 - `--output` never writes inside the analysed repository (work tree or
   `.git`), never through a symlink, and never over an existing file unless
-  you pass `--force`.
+  you pass `--force`. For a linked worktree it also refuses the common
+  directory and the main work tree that holds it.
 
 ## Repository boundary
 
@@ -271,6 +272,20 @@ resolved common directory to scope and nothing else.
 
 M1.1 refuses partial clones, alternates, includes, gitdir pointers and
 symlinked git dirs.
+
+These checks run in pure Python before any git process starts: bare
+repositories; a symlinked repository path, `.git`, or `HEAD`, `config`,
+`refs`, `packed-refs`, `objects`, `info`, `commondir`, `objects/info` or
+`objects/pack`; a `.git` file unless `--allow-linked-worktree` and it is a
+genuine linked worktree; a `commondir` file in an ordinary repository;
+non-empty `objects/info/alternates` or `http-alternates`; `.promisor` packs;
+and in the repository config (and `config.worktree` with
+`extensions.worktreeConfig`) any `[include]` or `[includeIf]` section,
+`core.attributesFile`, `core.worktree`, `extensions.partialClone`,
+`remote.*.promisor`, `remote.*.partialCloneFilter`, `mailmap.file` or
+`mailmap.blob`. The config is read by a strict reader: anything it cannot
+read without guessing is refused. Every git call then gets an explicit
+`GIT_DIR` and `GIT_WORK_TREE`.
 
 ## Privacy defaults
 

@@ -41,7 +41,7 @@ def prefix(repo):
     argv = ["git", "--no-pager"]
     for setting in CONFIG:
         argv += ["-c", setting]
-    return argv + ["-C", str(repo)]
+    return argv + ["-C", os.path.realpath(repo)]
 
 
 class GitTestCase(unittest.TestCase):
@@ -65,10 +65,13 @@ class TestRunner(GitTestCase):
         for _, kwargs in calls:
             env = kwargs["env"]
             self.assertTrue(env)
-            for key in hostile:
+            for key in ("GIT_EXEC_PATH", "GIT_CONFIG_PARAMETERS"):
                 self.assertNotIn(key, env)
-            self.assertEqual([k for k in env if k.startswith("GIT_")
-                              and k not in GIT_ENV], [])
+            # The parent's bogus GIT_DIR / GIT_WORK_TREE never win: ours do.
+            self.assertEqual(env["GIT_DIR"], os.path.realpath(repo / ".git"))
+            self.assertEqual(env["GIT_WORK_TREE"], os.path.realpath(repo))
+            self.assertEqual(sorted(k for k in env if k.startswith("GIT_")
+                                    and k not in GIT_ENV), ["GIT_DIR", "GIT_WORK_TREE"])
             for key, value in GIT_ENV.items():
                 self.assertEqual(env[key], value)
             self.assertEqual(env["GIT_CONFIG_GLOBAL"], "/dev/null")
