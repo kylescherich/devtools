@@ -53,8 +53,8 @@ Run from the repo root:
 
 ## Git Archaeologist rules (gitarch, BRIEF-DEVWS-022)
 - gitarch runs only `git`, via `subprocess.Popen([...], shell=False, start_new_session=True)` by absolute path, in its own process group, with fixed argument lists, a per-call timeout (default 60 s, `--timeout`) and streamed output caps (100 MB stdout, 1 MB stderr); on a timeout or an overrun the whole process group is killed (SIGTERM, SIGKILL after 2 s) and gitarch exits 3 ("git timed out" / "output limit").
-- Environment: copy `os.environ`, delete every key starting with `GIT_`, then set `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`.
-- Every call starts: `git --no-pager -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c color.ui=false -c log.showSignature=false -C <repo> <subcommand> ...`
+- Environment: copy `os.environ`, delete every key starting with `GIT_`, then set `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`, `GIT_NO_LAZY_FETCH=1`, `GIT_LITERAL_PATHSPECS=1`, `GIT_ATTR_NOSYSTEM=1`, and the explicit `GIT_DIR` and `GIT_WORK_TREE` from the preflight Scope.
+- Every call starts: `/abs/path/git --no-pager --literal-pathspecs -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c color.ui=false -c log.showSignature=false -c core.attributesFile=/dev/null -C <work tree> <subcommand> ...`
 - Every log/show/diff-tree call also carries `--no-ext-diff --no-textconv`. Never use `%G` format placeholders.
 - Allowed subcommands only: rev-parse, log, show, diff-tree, ls-files, cat-file, enforced by an allow-list inside the runner (anything else raises before running). Never status, checkout, fetch, pull, gc, blame.
 - User input: `--rev` must not start with `-` (usage error, exit 2) and is passed after `--end-of-options`; `--path` always after `--`.
