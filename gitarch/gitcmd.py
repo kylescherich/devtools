@@ -11,6 +11,16 @@ before a process starts. log, show and diff-tree always get --no-ext-diff
 --no-textconv, inserted here so no caller can forget them. The environment is
 a copy of os.environ without any GIT_* key, plus the settings in GIT_ENV. Each
 call has a timeout and an output cap; both end in GitError (exit 3).
+
+Repository boundary:
+gitarch reads one ordinary repository: its working tree and its own .git
+directory. It refuses (exit 3, clear message, before any git call) anything
+that would make git read or write elsewhere or reach the network. Linked
+worktrees are allowed only with --allow-linked-worktree, which adds the
+resolved common directory to scope and nothing else.
+
+M1.1 refuses partial clones, alternates, includes, gitdir pointers and
+symlinked git dirs.
 """
 import os
 import signal

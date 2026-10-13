@@ -261,6 +261,17 @@ time never appears.
   `.git`), never through a symlink, and never over an existing file unless
   you pass `--force`.
 
+## Repository boundary
+
+gitarch reads one ordinary repository: its working tree and its own .git
+directory. It refuses (exit 3, clear message, before any git call) anything
+that would make git read or write elsewhere or reach the network. Linked
+worktrees are allowed only with --allow-linked-worktree, which adds the
+resolved common directory to scope and nothing else.
+
+M1.1 refuses partial clones, alternates, includes, gitdir pointers and
+symlinked git dirs.
+
 ## Privacy defaults
 
 - No commit messages, no diffs and no author names by default. Commit
