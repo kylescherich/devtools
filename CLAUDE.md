@@ -52,7 +52,7 @@ Run from the repo root:
 - Commit messages and source files are pure ASCII; before every commit run both `python3 -m unittest discover` and `uv run --no-project --python 3.11 python -m unittest discover` and commit only if both print OK.
 
 ## Git Archaeologist rules (gitarch, BRIEF-DEVWS-022)
-- gitarch runs only `git`, via `subprocess.run([...], shell=False)` with fixed argument lists, a per-call timeout (default 60 s, `--timeout`) and a per-call output cap of 100 MB (exceeded -> exit 3 "git output too large").
+- gitarch runs only `git`, via `subprocess.Popen([...], shell=False, start_new_session=True)` by absolute path, in its own process group, with fixed argument lists, a per-call timeout (default 60 s, `--timeout`) and streamed output caps (100 MB stdout, 1 MB stderr); on a timeout or an overrun the whole process group is killed (SIGTERM, SIGKILL after 2 s) and gitarch exits 3 ("git timed out" / "output limit").
 - Environment: copy `os.environ`, delete every key starting with `GIT_`, then set `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`, `LC_ALL=C`.
 - Every call starts: `git --no-pager -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat -c color.ui=false -c log.showSignature=false -C <repo> <subcommand> ...`
 - Every log/show/diff-tree call also carries `--no-ext-diff --no-textconv`. Never use `%G` format placeholders.
