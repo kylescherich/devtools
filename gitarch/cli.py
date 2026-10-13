@@ -20,8 +20,9 @@ exit codes:
   0     ok
   2     usage error: unknown option, a --rev starting with "-", --diffs
         without --path, --force without --output, or a refused --output
-  3     git: not a git repository, no commits, unknown revision, git
-        missing, a git call timed out, or git output too large; or a
+  3     git: not a git repository, no commits, unknown revision, a --path
+        not in history, git missing or found inside the repository or the
+        current directory, a git call timed out, or git output too large; or a
         repository outside gitarch's boundary (refused before any git call)
 
 gitarch reads one ordinary repository: its work tree and its own .git
@@ -34,8 +35,10 @@ writes through a symlink, and refuses any place inside the analysed
 repository (its work tree or its .git directory).
 
 gitarch only reads: it runs git (rev-parse, log, show, diff-tree, ls-files,
-cat-file) with hooks, pagers, external diffs, textconv and signature checks
-switched off, and everything it prints passes through redaction.
+cat-file, plus "git --version" for the header) by absolute path, with hooks,
+pagers, external diffs, textconv, attributes files, lazy fetching and
+signature checks switched off and pathspecs taken literally; everything it
+prints passes through redaction.
 """
 
 
@@ -178,6 +181,8 @@ def main(argv=None):
                   allow_linked=args.allow_linked_worktree)
     except Refused as exc:
         return _fail(f"refused: {exc}", EXIT_GIT)
+    except GitError as exc:
+        return _fail(str(exc), EXIT_GIT)
     refusal = _check_not_in_repo(args.output, git.scope) if args.output else None
     if refusal:
         return _fail(refusal, EXIT_USAGE)
@@ -186,10 +191,12 @@ def main(argv=None):
                               authors=args.authors)
         subjects = history.subjects(git, model) if args.messages else {}
         diffs = history.diffs(git, model) if args.diffs else None
+        version = git.version()
     except GitError as exc:
         return _fail(str(exc), EXIT_GIT)
     name = os.path.basename(os.path.abspath(args.repo)) or "/"
-    document = render(Report(name, model, args.messages, diffs, subjects), args.format)
+    document = render(Report(name, model, args.messages, diffs, subjects, version),
+                      args.format)
     if not args.output:
         _write(sys.stdout, document)
         return EXIT_OK

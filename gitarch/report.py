@@ -92,6 +92,7 @@ class Report:
     messages: bool
     diffs: list | None         # history.Diff list with --diffs
     subjects: dict             # sha -> redacted subject (empty without --messages)
+    git_version: str = "-"     # from git --version
 
 
 def _header(rep):
@@ -102,6 +103,7 @@ def _header(rep):
     return [
         ("repo", rep.repo),
         ("rev", f"{ov.rev} ({_short(ov.sha)})"),
+        ("git", rep.git_version),
         ("commits", f"{ov.commits} ({_plural(ov.merges, 'merge')}, {ov.ordinary} ordinary)"),
         ("first commit", _date(ov.first)),
         ("last commit", _date(ov.last)),

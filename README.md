@@ -247,12 +247,25 @@ time never appears.
 
 - gitarch only reads. The only program it starts is `git`, without a shell,
   with a fixed list of arguments, and only these read-only subcommands:
-  `rev-parse`, `log`, `show`, `diff-tree`, `ls-files`, `cat-file`.
+  `rev-parse`, `log`, `show`, `diff-tree`, `ls-files`, `cat-file`. The one
+  documented exception is `git --version` (exactly that, with the same
+  environment, timeout and output cap), run once for the report header's
+  `git:` line.
+- git is found once, on the absolute entries of PATH only (`.`, empty and
+  relative entries are ignored), and always called by that absolute path.
+  gitarch refuses (exit 3) a git that resolves inside the repository or
+  whose directory is the current directory.
 - A repository cannot make gitarch run its programs: hooks, the pager,
   fsmonitor, external diff drivers, textconv filters and signature checks
   (and so `gpg.program`) are switched off on every call, your global and
-  system git config are ignored, and any `GIT_*` environment variable is
+  system git config and the system attributes file are ignored
+  (`core.attributesFile=/dev/null`), lazy fetching from promisor remotes
+  is off (`GIT_NO_LAZY_FETCH=1`), and any `GIT_*` environment variable is
   removed before git starts.
+- Paths are taken literally (`--literal-pathspecs`): `--path ':!x'` or
+  `--path ':(attr:foo)x.py'` names a file called exactly that, and a
+  `--path` that matches nothing in the history is exit 3 "path not in
+  history".
 - Each git call has a timeout (60 s, `--timeout`) and an output cap of
   100 MB.
 - `--rev` may not start with `-`, and git always reads it as a revision,
@@ -307,4 +320,4 @@ read without guessing is refused. Every git call then gets an explicit
 | --- | --- |
 | 0 | ok |
 | 2 | usage error: unknown option, a `--rev` starting with `-`, `--diffs` without `--path`, `--force` without `--output`, or a refused `--output` |
-| 3 | git: not a git repository, no commits, unknown revision, git missing, a git call timed out, or git output too large |
+| 3 | git: not a git repository, no commits, unknown revision, a `--path` not in history, git missing or found inside the repository or the current directory, a git call timed out, git output too large, or a repository outside the boundary (refused before any git call) |
