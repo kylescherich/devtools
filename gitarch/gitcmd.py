@@ -1,6 +1,7 @@
 """The only place gitarch runs a program: git, read-only, hardened.
 
-Every call is subprocess.run([...], shell=False) with a fixed argument list:
+Every call is subprocess.Popen([...], shell=False, start_new_session=True)
+with a fixed argument list:
 
     /abs/path/git --no-pager --literal-pathspecs
         -c core.hooksPath=/dev/null -c core.fsmonitor=false -c core.pager=cat
@@ -23,8 +24,14 @@ called by that absolute path. The environment is a copy of os.environ
 without any GIT_* key, plus the settings in GIT_ENV (no lazy fetch, literal
 pathspecs, no system attributes, no system or global config, no prompts, no
 optional locks, LC_ALL=C), the sanitized PATH, and an explicit GIT_DIR and
-GIT_WORK_TREE from the preflight Scope. Each call has a timeout and an
-output cap; both end in GitError (exit 3).
+GIT_WORK_TREE from the preflight Scope.
+
+Bounds: stdout and stderr are read by two reader threads, each with its own
+hard cap (100 MB stdout, 1 MB stderr); a reader that hits its cap keeps
+draining and discarding, so neither pipe can block the other. A timeout or
+a cap overrun kills the whole process group (SIGTERM, then SIGKILL after
+2 s; a plain kill off POSIX) and ends in GitError (exit 3): "git timed out"
+or "output limit".
 
 Repository boundary:
 gitarch reads one ordinary repository: its working tree and its own .git
@@ -40,14 +47,11 @@ import os
 import shutil
 import signal
 import subprocess
-import tempfile
+import threading
+import time
+from dataclasses import dataclass, field
 
 from gitarch.preflight import Scope, find_repo
-
-try:
-    import resource
-except ImportError:              # not POSIX: the size check after the run remains
-    resource = None
 
 ALLOWED = frozenset({"rev-parse", "log", "show", "diff-tree", "ls-files", "cat-file"})
 DIFF_COMMANDS = frozenset({"log", "show", "diff-tree"})
@@ -60,8 +64,12 @@ GIT_ENV = {"GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
            "GIT_NO_LAZY_FETCH": "1", "GIT_LITERAL_PATHSPECS": "1", "GIT_ATTR_NOSYSTEM": "1"}
 DEFAULT_TIMEOUT = 60
 MAX_OUTPUT = 100 * 1024 * 1024
+MAX_STDERR = 1024 * 1024
+KILL_GRACE = 2.0        # seconds between SIGTERM and SIGKILL
+_CHUNK = 65536
+_POLL = 0.02
+_POSIX = os.name == "posix"
 _STDERR_SHOWN = 300
-_SIGXFSZ = getattr(signal, "SIGXFSZ", None)    # file size limit hit
 
 
 class GitError(Exception):
@@ -136,10 +144,71 @@ def build_argv(repo, subcommand, args, executable="git"):
     return argv
 
 
-def _limit_output(max_bytes):
-    def apply():
-        resource.setrlimit(resource.RLIMIT_FSIZE, (max_bytes + 1, max_bytes + 1))
-    return apply if resource is not None else None
+class _Reader(threading.Thread):
+    """Drains one pipe to EOF. Keeps at most cap bytes; past the cap it sets
+    overflow and goes on reading and discarding, so the child never blocks
+    on this pipe and the other pipe keeps flowing."""
+
+    def __init__(self, pipe, cap, name):
+        super().__init__(name=f"gitarch-{name}", daemon=True)
+        self.pipe, self.cap = pipe, cap
+        self.chunks, self.kept = [], 0
+        self.overflow = threading.Event()
+
+    def run(self):
+        try:
+            while True:
+                chunk = self.pipe.read1(_CHUNK) if hasattr(self.pipe, "read1") \
+                    else self.pipe.read(_CHUNK)
+                if not chunk:
+                    break
+                room = self.cap - self.kept
+                if len(chunk) > room:
+                    if room > 0:
+                        self.chunks.append(chunk[:room])
+                        self.kept += room
+                    self.overflow.set()
+                    continue
+                self.chunks.append(chunk)
+                self.kept += len(chunk)
+        except (OSError, ValueError):
+            pass
+        finally:
+            try:
+                self.pipe.close()
+            except OSError:
+                pass
+
+    def data(self):
+        return b"".join(self.chunks)
+
+
+@dataclass
+class RunRecord:
+    """The last process a Git ran, for tests: its Popen and both readers."""
+    proc: object
+    readers: list = field(default_factory=list)
+
+
+def _kill_group(proc):
+    """SIGTERM to the whole process group, SIGKILL to it after KILL_GRACE
+    seconds (also reaching children that outlive the leader); a plain kill
+    off POSIX. Always reaps the leader."""
+    if not _POSIX:
+        proc.kill()
+        proc.wait()
+        return
+    for sig, grace in ((signal.SIGTERM, KILL_GRACE), (signal.SIGKILL, None)):
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+        if grace is not None:
+            try:
+                proc.wait(timeout=grace)
+            except subprocess.TimeoutExpired:
+                pass
+    proc.wait()
 
 
 def _first_line(data):
@@ -153,7 +222,7 @@ class Git:
     every call then runs in the Scope's work tree with its GIT_DIR."""
 
     def __init__(self, repo, *, timeout=DEFAULT_TIMEOUT, max_output=MAX_OUTPUT,
-                 allow_linked=False, executable=None):
+                 max_stderr=MAX_STDERR, allow_linked=False, executable=None):
         """executable is for tests only (fake git helpers); the CLI never
         passes it, so real runs always go through resolve_git()."""
         self.scope = repo if isinstance(repo, Scope) else find_repo(
@@ -161,6 +230,8 @@ class Git:
         self.repo = self.scope.work_tree
         self.timeout = timeout
         self.max_output = max_output
+        self.max_stderr = max_stderr
+        self.last_run = None
         self.executable = executable or resolve_git(self.scope)
 
     def run(self, subcommand, *args, ok=(0,)):
@@ -176,27 +247,58 @@ class Git:
         return text.removeprefix("git version ").strip() or "unknown"
 
     def _execute(self, argv, subcommand, ok):
-        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-            try:
-                proc = subprocess.run(argv, shell=False, env=git_env(self.scope),
-                                      stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                                      timeout=self.timeout,
-                                      preexec_fn=_limit_output(self.max_output))
-            except FileNotFoundError:
-                raise GitError("git not found (is it installed and on PATH?)") from None
-            except subprocess.TimeoutExpired:
-                raise GitError(f"git {subcommand} timed out after "
-                               f"{self.timeout:g} s") from None
-            size = os.fstat(out.fileno()).st_size
-            if size > self.max_output or (_SIGXFSZ is not None
-                                          and proc.returncode == -_SIGXFSZ):
-                raise GitError("git output too large")
-            err.seek(0)
-            stderr = err.read(4096)
-            if proc.returncode not in ok:
-                raise GitError(f"git {subcommand} failed: {_first_line(stderr)}")
-            out.seek(0)
-            return out.read()
+        try:
+            proc = subprocess.Popen(argv, shell=False, env=git_env(self.scope),
+                                    stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, start_new_session=_POSIX)
+        except FileNotFoundError:
+            raise GitError("git not found (is it installed and on PATH?)") from None
+        out = _Reader(proc.stdout, self.max_output, "stdout")
+        err = _Reader(proc.stderr, self.max_stderr, "stderr")
+        self.last_run = RunRecord(proc, [out, err])
+        out.start()
+        err.start()
+        deadline = time.monotonic() + self.timeout
+        failure = None
+        # Done when git has exited AND both pipes are at EOF (a child that
+        # keeps a pipe open counts against the timeout too). The waits
+        # return as soon as their process or reader finishes.
+        while True:
+            failure = self._overflow(out, err, subcommand)
+            if failure is not None:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = f"git timed out after {self.timeout:g} s (git {subcommand})"
+                break
+            step = min(_POLL, remaining)
+            if proc.poll() is None:
+                try:
+                    proc.wait(timeout=step)
+                except subprocess.TimeoutExpired:
+                    pass
+            elif out.is_alive() or err.is_alive():
+                (out if out.is_alive() else err).join(timeout=step)
+            else:
+                failure = self._overflow(out, err, subcommand)   # a last late overrun
+                break
+        if failure is not None:
+            _kill_group(proc)
+        for reader in (out, err):
+            reader.join(timeout=KILL_GRACE + 1)
+        if failure is not None:
+            raise GitError(failure)
+        if proc.returncode not in ok:
+            raise GitError(f"git {subcommand} failed: {_first_line(err.data())}")
+        return out.data()
+
+    def _overflow(self, out, err, subcommand):
+        for reader, cap in ((out, self.max_output), (err, self.max_stderr)):
+            if reader.overflow.is_set():
+                name = reader.name.removeprefix("gitarch-")
+                return (f"git output too large: output limit of {cap} bytes "
+                        f"exceeded on {name} (git {subcommand})")
+        return None
 
     def resolve(self, rev="HEAD"):
         """Full commit hash for rev, after checking the repository: GitError

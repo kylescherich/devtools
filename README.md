@@ -266,8 +266,12 @@ time never appears.
   `--path ':(attr:foo)x.py'` names a file called exactly that, and a
   `--path` that matches nothing in the history is exit 3 "path not in
   history".
-- Each git call has a timeout (60 s, `--timeout`) and an output cap of
-  100 MB.
+- Each git call has a timeout (60 s, `--timeout`) and hard output limits
+  (100 MB on stdout, 1 MB on stderr), read as a stream so nothing beyond
+  the limit is kept. git runs in its own process group; a timeout or an
+  output limit kills the whole group, including any child it started
+  (SIGTERM, then SIGKILL after 2 s), and gitarch exits 3 ("git timed out"
+  or "output limit").
 - `--rev` may not start with `-`, and git always reads it as a revision,
   never as an option; `--path` is always passed as a path.
 - `--output` never writes inside the analysed repository (work tree or

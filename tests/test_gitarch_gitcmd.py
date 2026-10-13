@@ -3,7 +3,9 @@ import contextlib
 import io
 import os
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,7 +18,7 @@ from gitarch.gitcmd import (ALLOWED, CommandRefused, Git, GitError, UsageError,
 from gitarch.preflight import find_repo
 from tests import gitarch_fixtures as fx
 
-REAL_RUN = subprocess.run
+REAL_POPEN = subprocess.Popen
 
 # Literal expectations, written out here on purpose: the tests must not take
 # them from gitcmd's own constants, so dropping one there fails a test.
@@ -43,13 +45,13 @@ def run_cli(argv):
 
 @contextlib.contextmanager
 def spy():
-    """Record every subprocess.run call gitarch makes, still running it."""
+    """Record every process gitarch starts (subprocess.Popen), still running it."""
     calls = []
 
     def recorder(argv, *args, **kwargs):
         calls.append((list(argv), kwargs))
-        return REAL_RUN(argv, *args, **kwargs)
-    with mock.patch.object(gitarch.gitcmd.subprocess, "run", side_effect=recorder):
+        return REAL_POPEN(argv, *args, **kwargs)
+    with mock.patch.object(gitarch.gitcmd.subprocess, "Popen", side_effect=recorder):
         yield calls
 
 
@@ -109,7 +111,7 @@ class TestRunner(GitTestCase):
             for key, value in EXPECTED_ENV.items():
                 self.assertEqual(env.get(key), value, key)
             self.assertIs(kwargs["shell"], False)
-            self.assertIn("timeout", kwargs)
+            self.assertIs(kwargs["start_new_session"], True)
 
     def test_mandatory_flags_every_call(self):
         repo = fx.basic_repo(self.dir)
@@ -158,18 +160,24 @@ class TestRunner(GitTestCase):
 
 class TestCliExit3(GitTestCase):
     def test_timeout_exit_3(self):
+        """--timeout reaches the runner: git is swapped for a process that
+        sleeps (started with git's exact Popen arguments); the CLI exits 3."""
         repo = fx.basic_repo(self.dir)
         seen = []
 
         def slow(argv, *args, **kwargs):
-            seen.append(kwargs.get("timeout"))
-            raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
-        with mock.patch.object(gitarch.gitcmd.subprocess, "run", side_effect=slow):
-            code, out, err = run_cli([repo, "--timeout", "7"])
+            seen.append(kwargs)
+            return REAL_POPEN([sys.executable, "-c", "import time; time.sleep(30)"],
+                              *args, **kwargs)
+        start = time.monotonic()
+        with mock.patch.object(gitarch.gitcmd.subprocess, "Popen", side_effect=slow):
+            code, out, err = run_cli([repo, "--timeout", "0.5"])
+        self.assertLess(time.monotonic() - start, 10)
         self.assertEqual(code, EXIT_GIT)
         self.assertTrue(err)
-        self.assertIn("timed out after 7 s", err)
-        self.assertEqual(seen, [7])
+        self.assertIn("git timed out after 0.5 s", err)
+        self.assertEqual(len(seen), 1)
+        self.assertIs(seen[0]["start_new_session"], True)
         self.assertEqual(out, "")
 
     def test_not_a_repo_exit_3(self):
