@@ -325,3 +325,42 @@ read without guessing is refused. Every git call then gets an explicit
 | 0 | ok |
 | 2 | usage error: unknown option, a `--rev` starting with `-`, `--diffs` without `--path`, `--force` without `--output`, or a refused `--output` |
 | 3 | git: not a git repository, no commits, unknown revision, a `--path` not in history, git missing or found inside the repository or the current directory, a git call timed out, git output too large, or a repository outside the boundary (refused before any git call) |
+
+# testdelta
+
+Test Delta: did this change make the tests better or worse? `testdelta`
+compares two test-run results, either two `python -m unittest -v` logs or
+two JUnit XML reports (pytest `--junitxml` and others), and lists newly
+failing, fixed, removed, added and much slower tests. It never runs tests.
+Standard library only; Python 3.11 to 3.13.
+
+## Usage
+
+```bash
+testdelta BEFORE AFTER [--input-format junit|unittest]
+          [--format text|md|html|json] [--output PATH [--force]]
+          [--details] [--slow-ratio R] [--slow-min SECONDS] [--fail-on-slow]
+          [--max-bytes N]
+```
+
+Status: milestone 1 in progress (BRIEF-DEVWS-024); the full description
+follows with the CLI.
+
+## Privacy defaults
+
+- The default report holds test ids, statuses and times only: no failure
+  messages, tracebacks or captured output.
+- `--details` adds, for regressions only, the first line of the failure
+  message and up to 20 traceback lines, passed through the same redaction as
+  Log Lens. Captured stdout/stderr (`system-out`, `system-err`) is never
+  shown.
+- XML with a `<!DOCTYPE` or `<!ENTITY` declaration is refused before parsing.
+
+## Exit codes
+
+| code | meaning |
+| --- | --- |
+| 0 | no regressions |
+| 1 | regressions: newly failing or erroring tests, removed tests, newly skipped tests; slower tests only with `--fail-on-slow` |
+| 2 | usage error, including a refused `--output` |
+| 4 | input missing, unreadable, empty, too large, unrecognised, in different formats, malformed, or refused XML |

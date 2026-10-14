@@ -26,7 +26,9 @@ class TestBootstrap(unittest.TestCase):
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertTrue(text)
         self.assertIn('gitarch = "gitarch.cli:main"', text)
-        self.assertIn('"gitarch"]', text)
+        packages = [line for line in text.splitlines() if line.startswith("packages = [")]
+        self.assertEqual(len(packages), 1)
+        self.assertIn('"gitarch"', packages[0])
 
     def test_unknown_option_is_usage_error(self):
         code, _, err = run(["--frobnicate"])
