@@ -1,5 +1,13 @@
 # HANDOFF — devtools
 
+## Status: Test Delta M1 (BRIEF-DEVWS-024 / DEC-226, branch devtools/testdelta-m1, no PR)
+- Tasks 1-5 done, one commit each: bootstrap (package, console script, _redact.py byte copy + identity test, six-package no-cross-import test, CLAUDE.md rules); readers (JUnit XML with DOCTYPE/ENTITY and non-UTF-8 refusal before ElementTree, unittest -v 3.11+/older forms, docstring lines, subtests, setUpClass, FAIL/ERROR blocks, 3.12 --durations; times never invented); comparison (newly failing / removed / newly skipped regressions, fixed / unskipped / added, still failing, other changes, slower/faster with ratio AND minimum, n/a never 0, total-count-drop warning); reports text/md/html/json (per-value redact then escape, final redact pass a tested no-op, --details for newly failing only, traceback redacted then capped at 20 lines, JSON schema testdelta/1); CLI exit codes 0/1/2/4 (2 > 4 > 1 > 0), --fail-on-slow, --output guards (no overwrite without --force, no symlink, never an input).
+- Tests: 590 in total (was 444); both interpreters OK. Real unittest -v output of the running interpreter is parsed in a test (format drift guard; 3.13 covered by CI only).
+- Known limitation: a token glued to a test name with an underscore (test_with_<token>) is not redacted; the loglens rules treat "_" as part of a word.
+
+### Next (Test Delta)
+- Kyle runs the acceptance runs (task 6); then the PR, ending "Do not merge until the Hub names the head hash (BRIEF-DEVWS-024)".
+
 ## Status: Git Archaeologist M1 (BRIEF-DEVWS-022 / DEC-198, branch devtools/gitarch-m1, no PR)
 - Tasks 1-5 done, one commit each: bootstrap + safety rules in CLAUDE.md; hardened git runner (gitarch/gitcmd.py: allow-list, mandatory -c flags, --no-ext-diff/--no-textconv, cleared GIT_* env, timeout, 100 MB cap, --rev after --end-of-options); history model (overview, file timeline with renames, deleted files, hotspots all-time/recent, weekly/monthly activity); reports text/md/html with --authors, --path, --messages, --diffs; CLI --output guards (no overwrite without --force, no symlink, never inside the repository) and e2e tests.
 - Tests: 383 in total (was 342); both interpreters OK. Hostile repo (fsmonitor, hooksPath, pager, textconv, external diff, filters, gpg.program, showSignature, a gpgsig commit) never runs its trap in any CLI mode or format. Mutations (drop --no-textconv, drop GIT_* env clearing, subjects by default) each fail tests.

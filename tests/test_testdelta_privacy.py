@@ -76,13 +76,15 @@ def junit_pair():
 def unittest_pair():
     W = "pkg.mod.Class"
     lines_b = (fx.ut_line(W, "test_new_fail", "pass") + fx.ut_line(W, "test_still", "fail")
-               + fx.ut_line(W, "test_skip_reason", "pass") + fx.ut_line(W, "test_xf", "pass")
+               + fx.ut_line(W, "test_skip_reason", "pass")
+               + fx.ut_line(W, "test_xfail_reason", "pass")
                + [f"test_skip_same ({W}.test_skip_same) ... skipped 'SKIPMARK same {GH}'"])
     blocks_b = [fx.ut_block("fail", W, "test_still", message="AssertionError: STILLMARK",
                             stdout="BUFOUTMARK " + GH, stderr="BUFERRMARK " + PW)]
     lines_a = (fx.ut_line(W, "test_new_fail", "fail") + fx.ut_line(W, "test_still", "fail")
                + [f"test_skip_reason ({W}.test_skip_reason) ... skipped 'SKIPMARK {GH}'"]
-               + fx.ut_line(W, "test_xf", "xfail") + fx.ut_line(W, "test_added", "error")
+               + fx.ut_line(W, "test_xfail_reason", "xfail")
+               + fx.ut_line(W, "test_added", "error")
                + [f"test_skip_same ({W}.test_skip_same) ... skipped 'SKIPMARK same {GH}'"])
     message = "\n".join(["    " + line for line in pem_lines()] + [f"    login(password={PW})",
                                        f"AssertionError: {MSG} key {AWS} rejected"])
@@ -208,7 +210,7 @@ class TestReasonsNeverShown(_Pipeline):
                 with self.subTest(label=label, details=details):
                     self.assert_absent(out, ("SKIPMARK", "XFAILMARK"), label)
                     self.assertIn("test_skip_reason", out)
-                    self.assertTrue("test_xfail_reason" in out or "test_xf" in out)
+                    self.assertIn("test_xfail_reason", out)
 
 
 class TestSecretInTestName(_Pipeline):
@@ -319,6 +321,7 @@ class TestDetails(_Pipeline):
             self.assertEqual(list(item), ["id", "before", "after", "before_time",
                                           "after_time", "message", "traceback",
                                           "traceback_omitted"])
+            self.assertLessEqual(len(item["traceback"]), 20)
         for name in ("still_failing", "added", "other_changes", "removed"):
             for item in doc[name]:
                 self.assertNotIn("message", item)

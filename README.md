@@ -343,24 +343,157 @@ testdelta BEFORE AFTER [--input-format junit|unittest]
           [--max-bytes N]
 ```
 
-Status: milestone 1 in progress (BRIEF-DEVWS-024); the full description
-follows with the CLI.
+Examples (synthetic file names):
+
+```bash
+python -m unittest -v 2> before.txt          # on the old commit
+python -m unittest -v 2> after.txt           # on the new commit
+testdelta before.txt after.txt               # text report on stdout
+
+pytest --junitxml=before.xml; pytest --junitxml=after.xml
+testdelta before.xml after.xml --format html --output ~/reports/delta.html
+testdelta before.xml after.xml --format json --fail-on-slow
+testdelta before.xml after.xml --details     # redacted failure text, regressions only
+```
+
+## Inputs
+
+The format is detected per file (a file starting with `<` is JUnit XML,
+anything else unittest text); `--input-format` sets it for both. Both files
+must be the same format.
+
+- **JUnit XML**: every `testcase` under `testsuites`/`testsuite` (nested
+  suites included). The id is `classname::name`, or `file::name` when
+  `classname` is empty. A `failure` child is fail, `error` is error,
+  `skipped` is skip; pytest's `skipped type="pytest.xfail"` is xfail and a
+  strict xpass (`failure message="[XPASS(strict)] ..."`) is xpass. Times
+  come from the `time` attribute; a missing, negative or non-numeric time is
+  n/a.
+- **unittest -v text** (what `python -m unittest -v` writes to stderr):
+  result lines `test_x (pkg.mod.Class.test_x) ... ok` (3.11 and later) and
+  the older `test_x (pkg.mod.Class) ... ok`; a docstring description on its
+  own line before ` ... ok`; test output printed between the test name and
+  its status; subtests (folded into their test with the worst status);
+  `setUpClass`/`setUpModule` errors; the `FAIL:` / `ERROR:` /
+  `UNEXPECTED SUCCESS:` blocks. The id is `pkg.mod.Class.test_x`. unittest
+  text has no times, except for the tests listed by Python 3.12's
+  `--durations N`; every other time is n/a. A time is never invented.
+- Statuses: pass, fail, error, skip, xfail (expected failure), xpass
+  (unexpected success). A test id that appears twice in one file is warned
+  about and keeps its worst status (error > fail > xpass > skip > xfail >
+  pass).
+
+## What the report shows
+
+Every format has the same sections, in this order: a header (input file
+names, input format, slow rule, details on/off, `redaction: on`), a result
+sentence, warnings, totals (count per status before and after), then:
+
+| section | rule | counts as |
+| --- | --- | --- |
+| Newly failing | pass/skip/xfail -> fail/error/xpass | regression |
+| Removed | in before, missing after | regression |
+| Newly skipped | pass -> skip | regression |
+| Slower | see below | regression only with `--fail-on-slow` |
+| Fixed | fail/error -> pass | improvement |
+| Unskipped | skip -> pass | improvement |
+| Added | missing before, in after | improvement |
+| Faster | see below | not counted |
+| Still failing (not new) | fail/error/xpass -> fail/error/xpass | not counted |
+| Other status changes | any other change (e.g. xpass -> pass, fail -> skip, pass -> xfail) | not counted |
+
+Slower: both times known, after >= `--slow-ratio` (default 2.0) times
+before AND after - before >= `--slow-min` seconds (default 0.5). Faster is
+the same rule in reverse. An n/a time is never treated as 0, so a test
+without both times is never slower or faster.
+
+Warnings: the total test count dropping comes first and loud
+(`!!! total test count dropped from N to M`); then duplicate ids, tests that
+started without a status (a truncated log), and a side with no times at
+all. Warnings hold counts only; the ids are listed after them.
+
+Reports are reproducible: the same inputs and arguments give byte-identical
+output in every format; the current date or time never appears.
+
+## JSON schema (`--format json`, schema `testdelta/1`)
+
+One object, keys in this order, lists sorted by id, ASCII only:
+
+```
+{
+  "schema": "testdelta/1",
+  "inputs": {"before": "<file name>", "after": "<file name>"},
+  "input_format": "junit" | "unittest",
+  "slow_rule": {"ratio": 2.0, "min_seconds": 0.5},
+  "details": false,
+  "fail_on_slow": false,
+  "counts": [{"status": "pass", "before": 8, "after": 7}, ...
+             one per status: pass, fail, error, skip, xfail, xpass,
+             then {"status": "total", ...}],
+  "summary": {"regressions": 2, "improvements": 1},
+  "warnings": ["total test count dropped from 10 to 9 (1 fewer)", ...],
+  "newly_failing": [ITEM, ...],
+  "removed": [...], "newly_skipped": [...], "slower": [...],
+  "fixed": [...], "unskipped": [...], "added": [...], "faster": [...],
+  "still_failing": [...], "other_changes": [...],
+  "duplicates": {"before": [id, ...], "after": [id, ...]},
+  "unresolved": {"before": [id, ...], "after": [id, ...]}
+}
+
+ITEM = {"id": "pkg.mod::test_x", "before": "pass", "after": "fail",
+        "before_time": 0.012, "after_time": null}
+```
+
+A status is `null` on the side where the test is missing; a time is `null`
+when n/a. With `--details`, `newly_failing` items also carry `"message"`
+(first line or `null`), `"traceback"` (at most 20 lines) and
+`"traceback_omitted"` (the number of earlier lines left out); no other item
+ever has these keys. Ids, names and details are redacted (see below).
+`summary.regressions` counts slower tests only with `--fail-on-slow`.
 
 ## Privacy defaults
 
 - The default report holds test ids, statuses and times only: no failure
-  messages, tracebacks or captured output.
-- `--details` adds, for regressions only, the first line of the failure
-  message and up to 20 traceback lines, passed through the same redaction as
-  Log Lens. Captured stdout/stderr (`system-out`, `system-err`) is never
-  shown.
-- XML with a `<!DOCTYPE` or `<!ENTITY` declaration is refused before parsing.
+  messages, tracebacks, captured output or skip/xfail reasons.
+- `--details` adds, for newly failing tests only, the first line of the
+  failure message and the last 20 traceback lines (with a count of the
+  lines left out). Captured stdout/stderr (`system-out`, `system-err`,
+  unittest `-b` `Stdout:`/`Stderr:`) and skip reasons are never read into
+  the report, with or without `--details`.
+- Everything testdelta prints or writes passes through the same redaction
+  as Log Lens (see "What is redacted" above), with no way to turn it off;
+  a traceback is redacted as a whole before it is cut to 20 lines, so a
+  multi-line secret is never split. Test names are untrusted input and are
+  redacted too: `test_login[<token>]` loses the token. A token glued to a
+  name with an underscore (`test_with_<token>`) is not recognised, as in
+  Log Lens.
+- Test names are escaped for the output format: control characters as
+  `\xNN`, bidi and line-separator characters as `\uXXXX`, a literal
+  backslash doubled in text and Markdown; the HTML report is one file with
+  a strict Content-Security-Policy and no scripts, links, images or event
+  handlers.
+
+## Input safety
+
+- testdelta opens only the two inputs and `--output`: no network, no
+  subprocess, no test runs. Inputs are never written and never read
+  through a symlink.
+- Each input is limited to 50 MB (`--max-bytes`), checked before reading,
+  and must be UTF-8.
+- XML containing `<!DOCTYPE` or `<!ENTITY` (any case) is refused before it
+  is parsed, as is XML declaring another encoding; only then is it parsed
+  with the standard library's `xml.etree.ElementTree`. Error messages never
+  quote input content.
+- `--output` refuses an existing file unless `--force`, any symlink (even
+  with `--force`), and either input file.
 
 ## Exit codes
+
+When several apply, the leftmost wins: 2 > 4 > 1 > 0.
 
 | code | meaning |
 | --- | --- |
 | 0 | no regressions |
 | 1 | regressions: newly failing or erroring tests, removed tests, newly skipped tests; slower tests only with `--fail-on-slow` |
-| 2 | usage error, including a refused `--output` |
-| 4 | input missing, unreadable, empty, too large, unrecognised, in different formats, malformed, or refused XML |
+| 2 | usage error: unknown option, a bad number, `--force` without `--output`, or a refused `--output` |
+| 4 | input missing, unreadable, a symlink or directory, empty, over `--max-bytes`, not UTF-8, not a recognised format, the two inputs in different formats, malformed XML, or XML with a DOCTYPE or ENTITY declaration (refused unparsed) |

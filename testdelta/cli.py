@@ -1,16 +1,23 @@
-"""Command line for testdelta. Everything printed passes through _redact."""
+"""Command line for testdelta. Everything printed passes through _redact.
+
+testdelta opens only the two inputs (read-only, never through a symlink) and
+--output; it runs no tests, no subprocess and makes no network access.
+"""
 import argparse
+import os
+import stat
 import sys
 
 from testdelta._redact import redact
-from testdelta.readers import DEFAULT_MAX_BYTES
+from testdelta.compare import compare
+from testdelta.readers import DEFAULT_MAX_BYTES, InputError, load_pair
+from testdelta.report import FORMATS, render
 
 EXIT_OK = 0
 EXIT_REGRESSIONS = 1
 EXIT_USAGE = 2
 EXIT_INPUT = 4
 
-FORMATS = ("text", "md", "html", "json")
 INPUT_FORMATS = ("junit", "unittest")
 DEFAULT_SLOW_RATIO = 2.0
 DEFAULT_SLOW_MIN = 0.5
@@ -107,13 +114,71 @@ def _fail(message, code):
     return code
 
 
+def _same_file(a, b):
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.realpath(a) == os.path.realpath(b)
+
+
+def _check_output(path, force, inputs):
+    """Refusal message for --output PATH, or None. Re-checked atomically by
+    the O_EXCL / O_NOFOLLOW open in _open_output."""
+    for label, source in zip(("before", "after"), inputs):
+        if _same_file(path, source):
+            return f"--output {path}: is the {label} input; refusing to overwrite it"
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        return f"--output {path}: cannot check ({exc.strerror})"
+    if stat.S_ISLNK(info.st_mode):
+        return f"--output {path}: is a symlink; refusing to follow it"
+    if not force:
+        return f"--output {path}: already exists (use --force to replace it)"
+    if not stat.S_ISREG(info.st_mode):
+        return f"--output {path}: not a regular file"
+    return None
+
+
+def _open_output(path, force):
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags |= os.O_TRUNC if force else os.O_EXCL
+    fd = os.open(path, flags, 0o644)
+    return os.fdopen(fd, "w", encoding="utf-8", newline="\n")
+
+
 def main(argv=None):
     parser = _build_parser()
     try:
-        parser.parse_args(argv)
+        args = parser.parse_args(argv)
     except _ArgError as exc:
         _write(sys.stderr, parser.format_usage())
         return _fail(str(exc), EXIT_USAGE)
     except SystemExit as exc:          # --help
         return exc.code or EXIT_OK
-    return _fail("comparison not implemented yet", EXIT_USAGE)
+    if args.force and not args.output:
+        return _fail("--force needs --output", EXIT_USAGE)
+    if args.output:
+        refusal = _check_output(args.output, args.force, (args.before, args.after))
+        if refusal:
+            return _fail(refusal, EXIT_USAGE)
+    try:
+        before, after = load_pair(args.before, args.after, args.input_format,
+                                  args.max_bytes)
+    except InputError as exc:
+        return _fail(str(exc), EXIT_INPUT)
+    delta = compare(before, after, args.slow_ratio, args.slow_min)
+    names = (os.path.basename(args.before), os.path.basename(args.after))
+    document = render(delta, args.format, args.details, names, args.fail_on_slow)
+    if args.output:
+        try:
+            with _open_output(args.output, args.force) as stream:
+                _write(stream, document)
+        except OSError as exc:
+            return _fail(f"--output {args.output}: cannot write ({exc.strerror})",
+                         EXIT_USAGE)
+    else:
+        _write(sys.stdout, document)
+    return EXIT_REGRESSIONS if delta.regressions(args.fail_on_slow) else EXIT_OK
