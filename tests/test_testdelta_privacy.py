@@ -1,7 +1,7 @@
 """testdelta privacy: by default only ids, statuses and times. Failure
 messages, tracebacks, captured output and skip/xfail reasons stay out of every
-format; --details shows, for newly failing tests only, the redacted first
-message line and at most 20 traceback lines. Every test asserts non-empty
+format; --details shows, for newly failing and added failing tests only,
+the redacted first message line and at most 20 traceback lines. Every test asserts non-empty
 output before checking for absence (DEC-071). Sentinels are built at runtime
 from tests/secret_shapes.py (DEC-195)."""
 import json
@@ -25,7 +25,12 @@ SECRETS = (GH, AWS, PW, PEM_BODY)
 MSG = "MSGMARK"              # newly failing message: shown only with --details
 TB = "TBMARK"                # newly failing traceback: shown only with --details
 HIDDEN = ("MSGSECONDLINE", "STILLMARK", "ADDEDMARK", "SKIPMARK", "XFAILMARK",
-          "SYSOUTMARK", "SYSERRMARK", "BUFOUTMARK", "BUFERRMARK", "OTHERMARK")
+          "SYSOUTMARK", "SYSERRMARK", "BUFOUTMARK", "BUFERRMARK", "OTHERMARK",
+          "ADDOUTMARK")
+# Added failing test (Hub DEC-233): message shown only with --details,
+# its captured output never.
+ADDED = "ADDEDMARK"
+ADDOUT = "ADDOUTMARK"
 
 
 def pem_lines():
@@ -64,7 +69,7 @@ def junit_pair():
         fx.junit_case("test_out", W, system_out="SYSOUTMARK " + GH,
                       system_err="SYSERRMARK " + PW),
         fx.junit_case("test_added", W, kind="error", message="ADDEDMARK " + GH,
-                      text="ADDEDMARK tb"),
+                      text="ADDEDMARK tb", system_out="ADDOUTMARK " + GH),
         fx.junit_case("test_newly_skipped_src", W, kind="skip", message="SKIPMARK 2"),
         fx.junit_case("test_other", W, kind="skip", message="SKIPMARK other"),
     ])
@@ -92,7 +97,8 @@ def unittest_pair():
                             stdout="BUFOUTMARK " + GH, stderr="BUFERRMARK " + PW),
                 fx.ut_block("fail", W, "test_still", message="AssertionError: STILLMARK",
                             stdout="BUFOUTMARK " + GH),
-                fx.ut_block("error", W, "test_added", message="ValueError: ADDEDMARK " + GH)]
+                fx.ut_block("error", W, "test_added", message="ValueError: ADDEDMARK " + GH,
+                            stdout="ADDOUTMARK " + GH)]
     # Traceback frames say TBMARK so the traceback marker is present too.
     blocks_a[0] = [line.replace("step_0()", f"step_0()  # {TB}") for line in blocks_a[0]]
     return fx.unittest_log(lines_b, blocks_b), fx.unittest_log(lines_a, blocks_a)
@@ -139,7 +145,7 @@ class TestDefaultPrivacy(_Pipeline):
         for before, after in (junit_pair(), unittest_pair()):
             text = before + after
             self.assertTrue(text)
-            for value in SECRETS + (MSG, TB, "SKIPMARK", "STILLMARK", "ADDEDMARK"):
+            for value in SECRETS + (MSG, TB, "SKIPMARK", "STILLMARK", ADDED, ADDOUT):
                 self.assertIn(value, text)
         self.assertIn("SYSOUTMARK", junit_pair()[1])
         self.assertIn("XFAILMARK", junit_pair()[1])
@@ -248,10 +254,25 @@ class TestDetails(_Pipeline):
                 self.assertIn("redacted", out)
                 self.assertNotIn("MSGSECONDLINE", out)
 
-    def test_details_only_for_newly_failing(self):
+    def test_details_only_for_newly_failing_and_added_failing(self):
         for label, out in self.outputs(details=True):
             with self.subTest(label=label):
-                self.assert_absent(out, ("STILLMARK", "ADDEDMARK", "OTHERMARK"), label)
+                self.assert_absent(out, ("STILLMARK", "OTHERMARK"), label)
+
+    def test_details_for_added_failing_redacted_never_its_output(self):
+        for label, out in self.outputs(details=True):
+            with self.subTest(label=label):
+                self.assert_absent(out, SECRETS + (ADDOUT,), label)
+                self.assertIn("test_added", out)
+                self.assertIn(ADDED, out)
+                self.assertIn(f"{ADDED} <redacted>",
+                              out.replace("&lt;", "<").replace("&gt;", ">"))
+
+    def test_added_failing_listed_without_text_by_default(self):
+        for label, out in self.outputs(details=False):
+            with self.subTest(label=label):
+                self.assert_absent(out, (ADDED, ADDOUT), label)
+                self.assertIn("test_added", out)
 
     def test_captured_output_absent_even_with_details(self):
         for label, out in self.outputs(details=True):
@@ -317,7 +338,8 @@ class TestDetails(_Pipeline):
         self.assertTrue(out)
         doc = json.loads(out)
         self.assertTrue(doc["newly_failing"])
-        for item in doc["newly_failing"]:
+        self.assertTrue(doc["added_failing"])
+        for item in doc["newly_failing"] + doc["added_failing"]:
             self.assertEqual(list(item), ["id", "before", "after", "before_time",
                                           "after_time", "message", "traceback",
                                           "traceback_omitted"])

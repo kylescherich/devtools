@@ -1,11 +1,16 @@
 """Synthetic inputs for the testdelta tests, built at test time.
 
-Nothing here runs a test suite: unittest -v logs and JUnit XML reports are
-assembled as text in the layout the real tools print (checked against
-Python 3.11 and 3.12 output). Hostile shapes (DOCTYPE/ENTITY bombs, unsafe
-test names) are built here too, so no file under tests/ holds them whole.
+unittest -v logs and JUnit XML reports are assembled as text in the layout
+the real tools print (checked against Python 3.11 and 3.12 output). The one
+exception is real_unittest_log(), which runs a small synthetic suite with
+this interpreter's unittest to guard against format drift (testdelta itself
+never runs tests). Hostile shapes (DOCTYPE/ENTITY bombs, unsafe test names)
+are built here too, so no file under tests/ holds them whole.
 """
 import pathlib
+import re
+import subprocess
+import sys
 from xml.sax.saxutils import escape, quoteattr
 
 SEP_EQ = "=" * 70
@@ -70,17 +75,43 @@ def ut_durations(pairs):
     return out + [""]
 
 
-def ut_footer(count, ok=True):
-    return [SEP_DASH, f"Ran {count} tests in 0.123s", "", "OK" if ok else "FAILED"]
+def ut_footer(count, ok=True, final=None):
+    """The dash line, "Ran N tests" and the final OK / FAILED line."""
+    if final is None:
+        final = "OK" if ok else "FAILED"
+    return [SEP_DASH, f"Ran {count} tests in 0.123s", "", final]
 
 
-def unittest_log(lines, blocks=(), durations=None, count=None, newline="\n"):
+def ut_final(lines, blocks):
+    """The final line real unittest prints for these lines and blocks:
+    FAILED/OK with failures, errors, skipped, expected failures and
+    unexpected successes, in unittest's order, zero counts left out."""
+    heads = [block[1] for block in blocks]
+    counts = [("failures", sum(h.startswith("FAIL: ") for h in heads)),
+              ("errors", sum(h.startswith("ERROR: ") for h in heads)),
+              ("skipped", sum(" ... skipped" in line for line in lines)),
+              ("expected failures", sum(line.endswith(" ... expected failure")
+                                        for line in lines)),
+              ("unexpected successes", sum(h.startswith("UNEXPECTED SUCCESS: ")
+                                           for h in heads))]
+    failed = counts[0][1] or counts[1][1] or counts[4][1]
+    items = ", ".join(f"{key}={value}" for key, value in counts if value)
+    word = "FAILED" if failed else "OK"
+    return f"{word} ({items})" if items else word
+
+
+def unittest_log(lines, blocks=(), durations=None, count=None, newline="\n",
+                 footer=True):
+    """footer: True for the real footer, False for none (a truncated log),
+    or a string for the final line."""
     out = list(lines) + [""]
     for block in blocks:
         out += block
     if durations is not None:
         out += ut_durations(durations)
-    out += ut_footer(len(lines) if count is None else count)
+    if footer is not False:
+        final = ut_final(lines, blocks) if footer is True else footer
+        out += ut_footer(len(lines) if count is None else count, final=final)
     return newline.join(out) + newline
 
 
@@ -129,9 +160,13 @@ def junit_case(name, classname="pkg.mod.Class", time="0.010", kind=None,
 
 
 def junit_xml(cases, root="testsuites", decl=True):
+    """The suite counts are those of the cases, as pytest writes them."""
     out = ['<?xml version="1.0" encoding="utf-8"?>'] if decl else []
-    suite = (f'<testsuite name="pytest" errors="0" failures="0" skipped="0" '
-             f'tests="{len(cases)}" time="1.000">')
+    errors = sum("<error" in case for case in cases)
+    failures = sum("<failure" in case for case in cases)
+    skipped = sum("<skipped" in case for case in cases)
+    suite = (f'<testsuite name="pytest" errors="{errors}" failures="{failures}" '
+             f'skipped="{skipped}" tests="{len(cases)}" time="1.000">')
     if root == "testsuites":
         out += ["<testsuites>", suite]
     else:
@@ -173,3 +208,62 @@ def external_entity(target="file:///etc/passwd"):
     return ("<?xml version=\"1.0\"?>\n<!DOCTYPE t [\n  <!ENTITY xxe SYSTEM \""
             + target + "\">\n]>\n"
             + '<testsuite><testcase classname="x" name="&xxe;"/></testsuite>\n')
+
+
+# --- real unittest output with awkward names ----------------------------------
+
+# Test names real unittest prints as they are: " ... ", "(", ")" and " ... ok"
+# inside the name, a docstring that looks like a result line, a subtest and a
+# skip reason holding " ... ".
+ODD_WHERE = "test_dyn.C"
+ODD_NAMES = ("test ... odd", "test (x) ... ok", "test_doc ... z", "test_sub ... s",
+             "test_skip ... k", "test_ok")
+
+_ODD_SUITE = """\
+import unittest
+FAIL = {fail}
+class C(unittest.TestCase):
+    pass
+def _plain(self):
+    if FAIL:
+        self.fail("boom")
+def _doc(self):
+    \"\"\"Doc ... ok (fake.C.y) ... ok\"\"\"
+    if FAIL:
+        self.fail("doc")
+def _sub(self):
+    for i in range(2):
+        with self.subTest(i=i):
+            if FAIL:
+                self.assertEqual(i, 0)
+@unittest.skip("why ... ok")
+def _skip(self):
+    pass
+def _ok(self):
+    pass
+setattr(C, "test ... odd", _plain)
+setattr(C, "test (x) ... ok", _plain)
+setattr(C, "test_doc ... z", _doc)
+setattr(C, "test_sub ... s", _sub)
+setattr(C, "test_skip ... k", _skip)
+setattr(C, "test_ok", _ok)
+"""
+
+
+def real_unittest_log(directory, fail, form="long"):
+    """The -v log (stderr) of this interpreter's unittest on the odd-name
+    suite; form="short" rewrites ids to the pre-3.11 'name (module.Class)'."""
+    work = pathlib.Path(directory) / ("suite_fail" if fail else "suite_pass")
+    work.mkdir()
+    write(work, "test_dyn.py", _ODD_SUITE.format(fail=bool(fail)))
+    argv = [sys.executable, "-I", "-m", "unittest", "discover", "-v",
+            "-s", str(work), "-t", str(work)]
+    if sys.version_info >= (3, 12):
+        argv += ["--durations", "0"]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=work)
+    log = proc.stderr
+    if form == "short":
+        for name in ODD_NAMES:
+            log = log.replace(f"({ODD_WHERE}.{name})", f"({ODD_WHERE})")
+        assert not re.search(re.escape(ODD_WHERE) + r"\.test", log)
+    return log

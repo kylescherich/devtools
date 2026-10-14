@@ -286,6 +286,11 @@ class TestPreservation(RedactTable):
             ("auth: login ok", f"auth: {R} ok"),
             ("svc-deploy@proj.iam.example.test denied", "<email> denied"),
             ("mailto:ops@example.test", "mailto:<email>"),
+            # accepted over-redaction (BRIEF-DEVWS-026, privacy over
+            # fidelity): a long sk-... word after "_", "-" or "/" is redacted
+            ("build_" + ss.SK_DASH + "checkpoint", f"build_{R}"),
+            ("build-" + ss.SK_DASH + "checkpoint", f"build-{R}"),
+            ("path/" + ss.SK_DASH + "checkpointing", f"path/{R}"),
         ])
 
 

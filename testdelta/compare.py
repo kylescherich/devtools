@@ -3,29 +3,35 @@
 Every test id present on either side lands in at most one status category:
 
   newly_failing   pass/skip/xfail -> fail/error/xpass      regression
+  added_failing   missing before, fail/error/xpass after   regression
   removed         in before, missing after                 regression
   newly_skipped   pass -> skip                             regression
   fixed           fail/error -> pass                       improvement
   unskipped       skip -> pass                             improvement
-  added           missing before, in after                 improvement
+  added           missing before, any other status after   improvement
   still_failing   fail/error/xpass -> fail/error/xpass     unchanged problem
   other_changes   any other status change                  not counted
 
 and, independently, in slower or faster when both times are known:
 slower means after >= ratio * before AND after - before >= minimum (faster
 the same in reverse). An n/a time is never treated as 0. Slower counts as a
-regression only when asked (--fail-on-slow).
+regression only when asked (--fail-on-slow). newly_failing and
+added_failing carry the after side's failure message and traceback.
 """
+import re
 from dataclasses import dataclass
 
 from testdelta.readers import BAD, STATUSES
 
-REGRESSIONS = ("newly_failing", "removed", "newly_skipped")
+REGRESSIONS = ("newly_failing", "added_failing", "removed", "newly_skipped")
 IMPROVEMENTS = ("fixed", "unskipped", "added")
 CATEGORIES = (REGRESSIONS + ("slower",) + IMPROVEMENTS
               + ("faster", "still_failing", "other_changes"))
+DETAILED = ("newly_failing", "added_failing")   # carry message and traceback
 
 _WAS_OK = frozenset({"pass", "skip", "xfail"})
+_LOUD = re.compile(r"(?:(?:before|after): )?(?:total test count dropped|no summary line|"
+                   r"report declares|report has)")
 
 
 @dataclass(frozen=True)
@@ -35,7 +41,7 @@ class Change:
     after: str = None
     before_time: float = None
     after_time: float = None
-    message: str = None         # after side, newly_failing only
+    message: str = None         # after side, DETAILED categories only
     traceback: tuple = ()
 
 
@@ -66,7 +72,7 @@ class Delta:
 def classify(before, after):
     """The status category of one id, or None when nothing changed."""
     if before is None:
-        return "added"
+        return "added_failing" if after in BAD else "added"
     if after is None:
         return "removed"
     if before in BAD and after in BAD:
@@ -106,6 +112,11 @@ def _plural(count, word):
     return f"{count} {word}" if count == 1 else f"{count} {word}s"
 
 
+def is_loud(warning):
+    """Warnings that may hide a failed run are shown loud in every format."""
+    return bool(_LOUD.match(warning))
+
+
 def _warnings(before, after, total_before, total_after):
     out = []
     if total_after < total_before:
@@ -118,6 +129,9 @@ def _warnings(before, after, total_before, total_after):
         if run.unresolved:
             out.append(f"{side}: {_plural(len(run.unresolved), 'test')} started without "
                        "a status (truncated log?); left out")
+        if not run.summary:
+            out.append(f"{side}: no summary line: the log may be truncated")
+        out += [f"{side}: {check}" for check in run.checks]
     for side, run in (("before", before), ("after", after)):
         if run.results and all(r.time is None for r in run.results.values()):
             out.append(f"{side}: no test times; slower/faster need both times")
@@ -133,7 +147,7 @@ def compare(before, after, slow_ratio=2.0, slow_min=0.5):
         category = classify(old and old.status, new and new.status)
         change = Change(test_id, old and old.status, new and new.status,
                         old.time if old else None, new.time if new else None)
-        if category == "newly_failing":
+        if category in DETAILED:
             lists[category].append(Change(change.id, change.before, change.after,
                                           change.before_time, change.after_time,
                                           new.message, new.traceback))

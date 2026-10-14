@@ -123,6 +123,19 @@ class TestExitCodes(_Files):
         self.assertIn("pkg.mod.Class.test_a", out)
         self.assertIn("input format = unittest", out)
 
+    def test_odd_names_from_real_unittest_newly_failing(self):
+        # BRIEF-DEVWS-026 finding 1: "test ... odd" passing before and
+        # failing after is newly failing (exit 1), never "added".
+        b = fx.write(self.dir, "b.txt", fx.real_unittest_log(self.outdir, False))
+        a = fx.write(self.dir, "a.txt", fx.real_unittest_log(self.outdir, True))
+        out, _ = self.assert_code([b, a], EXIT_REGRESSIONS)
+        self.assertTrue(out)
+        self.assertIn("NEWLY FAILING (4)", out)
+        self.assertIn("pass -> fail   ", out)
+        self.assertIn("test_dyn.C.test ... odd\n", out)
+        self.assertIn("ADDED (0)", out)
+        self.assertIn("REMOVED (0)", out)
+
     def test_usage_errors_exit_2(self):
         b, a = self.pair([("t", "pass")], [("t", "pass")])
         for argv in ([b], [b, a, "--frobnicate"], [b, a, "--force"],

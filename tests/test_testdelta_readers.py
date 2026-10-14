@@ -325,6 +325,81 @@ class TestRealUnittestOutput(unittest.TestCase):
             self.assertIsNone(run.results[f"{w}.test_skip"].time)
 
 
+class TestOddNamesRealUnittest(_TempDir):
+    """BRIEF-DEVWS-026 task 1: names holding " ... ", "(" and ")" printed by
+    this interpreter's real unittest (3.11 and 3.12+ print the same long
+    form; the older short form is derived from it)."""
+
+    def ids(self, statuses):
+        return {f"{fx.ODD_WHERE}.{name}": status for name, status in statuses.items()}
+
+    def check(self, fail, form):
+        log = fx.real_unittest_log(self.dir, fail, form)
+        self.assertTrue(log)
+        self.assertIn("test ... odd (", log)
+        self.assertIn("skipped 'why ... ok'", log)
+        run = parse_unittest(log)
+        bad = "fail" if fail else "pass"
+        self.assertEqual({k: v.status for k, v in run.results.items()}, self.ids({
+            "test ... odd": bad, "test (x) ... ok": bad, "test_doc ... z": bad,
+            "test_sub ... s": bad, "test_skip ... k": "skip", "test_ok": "pass"}))
+        self.assertEqual(run.unresolved, ())
+        self.assertEqual(run.duplicates, ())
+        return run
+
+    def test_passing_run_long_and_short_form(self):
+        for form in ("long", "short"):
+            with self.subTest(form=form):
+                with tempfile.TemporaryDirectory() as tmp:
+                    self.dir = tmp
+                    self.check(False, form)
+
+    def test_failing_run_long_and_short_form(self):
+        for form in ("long", "short"):
+            with self.subTest(form=form):
+                with tempfile.TemporaryDirectory() as tmp:
+                    self.dir = tmp
+                    run = self.check(True, form)
+                    results = run.results
+                    w = fx.ODD_WHERE
+                    self.assertEqual(results[f"{w}.test ... odd"].message,
+                                     "AssertionError: boom")
+                    # The docstring line between FAIL: and the dashes is
+                    # not the body: the traceback is kept.
+                    doc = results[f"{w}.test_doc ... z"]
+                    self.assertEqual(doc.message, "AssertionError: doc")
+                    self.assertEqual(doc.traceback[0], "Traceback (most recent call last):")
+                    if sys.version_info >= (3, 12):
+                        self.assertTrue(run.has_durations)
+                        self.assertIsNotNone(results[f"{w}.test ... odd"].time)
+
+    def test_dots_in_name_are_split_from_the_right(self):
+        lines = [f"test ... odd ({W}.test ... odd) ... FAIL",
+                 f"test (x) ... ok ({W}.test (x) ... ok) ... ERROR",
+                 f"test_s ... x ({W}.test_s ... x) ... skipped 'a ... ok'",
+                 f"test (a.b) ({W}) ... FAIL"]
+        run = parse_unittest(fx.unittest_log(lines, count=4))
+        self.assertEqual({k: v.status for k, v in run.results.items()}, {
+            f"{W}.test ... odd": "fail", f"{W}.test (x) ... ok": "error",
+            f"{W}.test_s ... x": "skip", f"{W}.test (a.b)": "fail"})
+
+    def test_docstring_that_looks_like_a_result(self):
+        lines = [f"test_d ({W}.test_d)", f"test_e ({W}.test_e) ... ok ... FAIL",
+                 f"test_e ({W}.test_e) ... ok"]
+        run = parse_unittest(fx.unittest_log(lines, count=2))
+        self.assertEqual(run.results[f"{W}.test_d"].status, "fail")
+        self.assertEqual(run.results[f"{W}.test_e"].status, "pass")
+
+    def test_status_after_glued_output_keeps_the_worst(self):
+        lines = [f"test_a ({W}.test_a) ... noise ... ok", "FAIL",
+                 f"test_b ({W}.test_b) ... noise ... okFAIL",
+                 f"test_c ({W}.test_c) ... ok"]
+        run = parse_unittest(fx.unittest_log(lines, count=3))
+        self.assertEqual(run.results[f"{W}.test_a"].status, "fail")
+        self.assertEqual(run.unresolved, (f"{W}.test_b",))
+        self.assertEqual(run.results[f"{W}.test_c"].status, "pass")
+
+
 class TestLoad(_TempDir):
     def test_detects_both_formats(self):
         xml = self.write("a.xml", fx.junit_simple([("t", "pass")]))

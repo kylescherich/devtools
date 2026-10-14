@@ -3,8 +3,8 @@ minimum, n/a never counted), totals and warnings. Runs are built directly."""
 import itertools
 import unittest
 
-from testdelta.compare import (CATEGORIES, IMPROVEMENTS, REGRESSIONS, classify,
-                               compare, speed)
+from testdelta.compare import (CATEGORIES, DETAILED, IMPROVEMENTS, REGRESSIONS,
+                               classify, compare, speed)
 from testdelta.readers import STATUSES, Result, Run
 
 
@@ -68,6 +68,24 @@ class TestCategories(unittest.TestCase):
             with self.subTest(test_id=test_id):
                 self.assertEqual(found, [expected] if expected else [])
 
+    def test_added_failing_classify(self):
+        # Hub DEC-233: absent before and fail/error/xpass after is a regression.
+        for status in STATUSES:
+            with self.subTest(after=status):
+                expected = "added_failing" if status in ("fail", "error", "xpass") else "added"
+                self.assertEqual(classify(None, status), expected)
+
+    def test_added_failing_counted_as_regression_not_improvement(self):
+        delta = compare(run({"a": "pass"}),
+                        run({"a": "pass", "f": "fail", "e": "error", "x": "xpass",
+                             "p": "pass", "s": "skip", "xf": "xfail"}))
+        self.assertEqual(ids(delta, "added_failing"), ["e", "f", "x"])
+        self.assertEqual(ids(delta, "added"), ["p", "s", "xf"])
+        self.assertEqual(delta.regressions(), 3)
+        self.assertEqual(delta.improvements(), 3)
+        self.assertIn("added_failing", REGRESSIONS)
+        self.assertNotIn("added_failing", IMPROVEMENTS)
+
     def test_added_and_removed(self):
         delta = compare(run({"a": "pass", "gone": "fail"}), run({"a": "pass", "new": "skip"}))
         self.assertEqual(ids(delta, "removed"), ["gone"])
@@ -90,9 +108,10 @@ class TestCategories(unittest.TestCase):
 
     def test_regression_and_improvement_counts(self):
         before = run({"nf": "pass", "rm": "pass", "ns": "pass", "fx": "fail", "us": "skip"})
-        after = run({"nf": "error", "ns": "skip", "fx": "pass", "us": "pass", "ad": "pass"})
+        after = run({"nf": "error", "ns": "skip", "fx": "pass", "us": "pass", "ad": "pass",
+                     "af": "fail"})
         delta = compare(before, after)
-        self.assertEqual(delta.regressions(), 3)
+        self.assertEqual(delta.regressions(), 4)
         self.assertEqual(delta.improvements(), 3)
         for name in REGRESSIONS + IMPROVEMENTS:
             self.assertEqual(len(delta.categories[name]), 1, name)
@@ -115,7 +134,7 @@ class TestCategories(unittest.TestCase):
         delta = compare(run({"a": "pass", "b": "skip"}), run({"a": "pass", "b": "skip"}))
         self.assertTrue(all(not items for items in delta.categories.values()))
 
-    def test_only_newly_failing_carries_failure_text(self):
+    def test_only_detailed_categories_carry_failure_text(self):
         before = run({"nf": "pass", "sf": ("fail", 1.0, "old msg"), "ad": "pass"})
         after = run({"nf": ("fail", None, "new msg"), "sf": ("fail", 9.0, "still msg"),
                      "x": ("error", None, "added msg"), "ad": "pass"})
@@ -123,8 +142,12 @@ class TestCategories(unittest.TestCase):
         newly = delta.categories["newly_failing"][0]
         self.assertEqual(newly.message, "new msg")
         self.assertEqual(newly.traceback, ("tb 1", "tb 2"))
+        added = delta.categories["added_failing"][0]
+        self.assertEqual((added.id, added.message), ("x", "added msg"))
+        self.assertEqual(added.traceback, ("tb 1", "tb 2"))
+        self.assertEqual(DETAILED, ("newly_failing", "added_failing"))
         for name in CATEGORIES:
-            if name == "newly_failing":
+            if name in DETAILED:
                 continue
             for change in delta.categories[name]:
                 self.assertIsNone(change.message, name)
