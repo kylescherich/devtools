@@ -3,6 +3,7 @@ import argparse
 import sys
 
 from testdelta._redact import redact
+from testdelta.readers import DEFAULT_MAX_BYTES
 
 EXIT_OK = 0
 EXIT_REGRESSIONS = 1
@@ -11,7 +12,6 @@ EXIT_INPUT = 4
 
 FORMATS = ("text", "md", "html", "json")
 INPUT_FORMATS = ("junit", "unittest")
-DEFAULT_MAX_BYTES = 50 * 1024 * 1024
 DEFAULT_SLOW_RATIO = 2.0
 DEFAULT_SLOW_MIN = 0.5
 
