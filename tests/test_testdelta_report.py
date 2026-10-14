@@ -62,7 +62,8 @@ class TestStructure(unittest.TestCase):
                 self.assertTrue(out.isascii())
 
     def test_sections_in_fixed_order(self):
-        expected = ["newly_failing", "removed", "newly_skipped", "slower", "fixed",
+        expected = ["newly_failing", "added_failing", "removed", "newly_skipped", "slower",
+                    "fixed",
                     "unskipped", "added", "faster", "still_failing", "other_changes"]
         self.assertEqual(list(CATEGORIES), expected)
         for fmt in ("text", "md", "html"):
@@ -78,8 +79,8 @@ class TestStructure(unittest.TestCase):
     def test_text_rows_and_summary(self):
         out = render(sample_delta(), "text")
         self.assertTrue(out)
-        self.assertIn("RESULT WORSE: 4 regressions (1 newly failing, 2 removed, "
-                      "1 newly skipped); 3 improvements.", out)
+        self.assertIn("RESULT WORSE: 4 regressions (1 newly failing, 0 added failing, "
+                      "2 removed, 1 newly skipped); 3 improvements.", out)
         self.assertIn("\n   pass -> fail      1.000s -> 0.900s     pkg::t_new_fail\n", out)
         self.assertIn("\n   pass -> -            n/a -> n/a        pkg::t_removed\n", out)
         self.assertIn("\n   pass -> pass      1.000s -> 2.500s     pkg::t_slow\n", out)
@@ -90,8 +91,8 @@ class TestStructure(unittest.TestCase):
     def test_fail_on_slow_counts_slower_in_summary(self):
         out = render(sample_delta(), "text", fail_on_slow=True)
         self.assertTrue(out)
-        self.assertIn("RESULT WORSE: 5 regressions (1 newly failing, 2 removed, "
-                      "1 newly skipped, 1 slower)", out)
+        self.assertIn("RESULT WORSE: 5 regressions (1 newly failing, 0 added failing, "
+                      "2 removed, 1 newly skipped, 1 slower)", out)
 
     def test_no_regressions_summary_and_empty_sections(self):
         delta = compare(run({"a": ("fail", 1.0)}), run({"a": ("pass", 1.0)}))

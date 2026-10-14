@@ -339,7 +339,8 @@ read without guessing is refused. Every git call then gets an explicit
 Test Delta: did this change make the tests better or worse? `testdelta`
 compares two test-run results, either two `python -m unittest -v` logs or
 two JUnit XML reports (pytest `--junitxml` and others), and lists newly
-failing, fixed, removed, added and much slower tests. It never runs tests.
+failing, added failing, fixed, removed, added and much slower tests. It never
+runs tests.
 Standard library only; Python 3.11 to 3.13.
 
 ## Usage
@@ -419,12 +420,13 @@ sentence, warnings, totals (count per status before and after), then:
 | section | rule | counts as |
 | --- | --- | --- |
 | Newly failing | pass/skip/xfail -> fail/error/xpass | regression |
+| Added failing | missing before, fail/error/xpass after (Hub DEC-233) | regression |
 | Removed | in before, missing after | regression |
 | Newly skipped | pass -> skip | regression |
 | Slower | see below | regression only with `--fail-on-slow` |
 | Fixed | fail/error -> pass | improvement |
 | Unskipped | skip -> pass | improvement |
-| Added | missing before, in after | improvement |
+| Added | missing before, pass/skip/xfail after | improvement |
 | Faster | see below | not counted |
 | Still failing (not new) | fail/error/xpass -> fail/error/xpass | not counted |
 | Other status changes | any other change (e.g. xpass -> pass, fail -> skip, pass -> xfail) | not counted |
@@ -440,11 +442,10 @@ tests that started without a status (a truncated log), a unittest log with
 no `Ran N tests` summary (loud: `no summary line: the log may be
 truncated`) and declared-vs-parsed count mismatches (loud: `report declares
 ... ; parsed ...`, or `report has N suite-level error/failure elements not
-tied to any test`); then added tests that fail (loud: `N added tests fail`;
-they stay under Added and do not change the exit code); then a side with no
-times at all. Loud warnings are `!!!` in text, bold in Markdown and
-highlighted in HTML. Warnings hold counts only; the ids are listed after
-them.
+tied to any test`); then a side with no times at all. Loud warnings are
+`!!!` in text, bold in Markdown and highlighted in HTML. Warnings hold
+counts only; the ids are listed after them. A failing added test is not a
+warning but a regression (the Added failing section).
 
 Known limit: if a log is cut so that the only evidence of a failure (its
 status word and its `FAIL:` block) is gone and the test was the last one,
@@ -472,6 +473,7 @@ One object, keys in this order, lists sorted by id, ASCII only:
   "summary": {"regressions": 2, "improvements": 1},
   "warnings": ["total test count dropped from 10 to 9 (1 fewer)", ...],
   "newly_failing": [ITEM, ...],
+  "added_failing": [ITEM, ...],
   "removed": [...], "newly_skipped": [...], "slower": [...],
   "fixed": [...], "unskipped": [...], "added": [...], "faster": [...],
   "still_failing": [...], "other_changes": [...],
@@ -484,8 +486,8 @@ ITEM = {"id": "pkg.mod::test_x", "before": "pass", "after": "fail",
 ```
 
 A status is `null` on the side where the test is missing; a time is `null`
-when n/a. With `--details`, `newly_failing` items also carry `"message"`
-(first line or `null`), `"traceback"` (at most 20 lines) and
+when n/a. With `--details`, `newly_failing` and `added_failing` items also
+carry `"message"` (first line or `null`), `"traceback"` (at most 20 lines) and
 `"traceback_omitted"` (the number of earlier lines left out); no other item
 ever has these keys. Ids, names and details are redacted (see below).
 `warnings` holds the same strings as the other formats (the report-level
@@ -496,7 +498,8 @@ check only adds new strings; the schema stays `testdelta/1`).
 
 - The default report holds test ids, statuses and times only: no failure
   messages, tracebacks, captured output or skip/xfail reasons.
-- `--details` adds, for newly failing tests only, the first line of the
+- `--details` adds, for newly failing and added failing tests only, the
+  first line of the
   failure message and the last 20 traceback lines (with a count of the
   lines left out). Captured stdout/stderr (`system-out`, `system-err`,
   unittest `-b` `Stdout:`/`Stderr:`) and skip reasons are never read into
@@ -536,6 +539,6 @@ When several apply, the leftmost wins: 2 > 4 > 1 > 0.
 | code | meaning |
 | --- | --- |
 | 0 | no regressions |
-| 1 | regressions: newly failing or erroring tests, removed tests, newly skipped tests; slower tests only with `--fail-on-slow` |
+| 1 | regressions: newly failing or erroring tests, added tests that fail, error or unexpectedly pass, removed tests, newly skipped tests; slower tests only with `--fail-on-slow` |
 | 2 | usage error: unknown option, a bad number, `--force` without `--output`, or a refused `--output` |
 | 4 | input missing, unreadable, a symlink or directory, empty, over `--max-bytes`, not UTF-8, not a recognised format, the two inputs in different formats, malformed XML, XML with a DOCTYPE or ENTITY declaration (refused unparsed), or a report that says the run failed but names no failing test |

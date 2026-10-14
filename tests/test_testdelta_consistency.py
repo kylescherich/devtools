@@ -1,7 +1,7 @@
 """testdelta report-level consistency (BRIEF-DEVWS-026 task 2): a report
 that says the run failed must name a failing test, else exit 4; other
-declared-vs-parsed mismatches, truncated logs and failing added tests are
-loud warnings. Inputs are synthetic, written to temp dirs at test time."""
+declared-vs-parsed mismatches and truncated logs are loud warnings; a
+failing added test is a regression (Hub DEC-233). Inputs are synthetic, written to temp dirs at test time."""
 import contextlib
 import io
 import json
@@ -10,6 +10,7 @@ import unittest
 
 from testdelta.cli import EXIT_INPUT, EXIT_OK, EXIT_REGRESSIONS, main
 from testdelta.readers import REFUSED_FAILED, InputError, load
+from tests import secret_shapes as ss
 from tests import testdelta_fixtures as fx
 
 W = "pkg.mod.Class"
@@ -228,41 +229,100 @@ class TestCleanAndMismatch(_Files):
 
 
 class TestAddedFailing(_Files):
-    """Kyle's addition: a brand-new failing test stays an improvement
-    ("added"; regression rules unchanged) but is a loud warning."""
+    """Hub DEC-233: a test absent before and fail/error/xpass after is a
+    regression ("added failing", exit 1), listed right after newly failing;
+    added tests that pass stay "added" improvements. The former warning
+    "N added tests fail" is gone (the category replaces it)."""
 
-    def test_junit_added_failing_warns(self):
+    def check_one(self, before, after, test_id, status):
+        out = self.report(before, after, EXIT_REGRESSIONS)
+        self.assertIn("RESULT WORSE: 1 regression (0 newly failing, 1 added failing, "
+                      "0 removed, 0 newly skipped); 0 improvements.", out)
+        self.assertIn(f"ADDED FAILING (1)\n      - -> {status:<5}", out)
+        self.assertIn("ADDED (0)", out)
+        self.assertLess(out.index("NEWLY FAILING ("), out.index("ADDED FAILING ("))
+        self.assertLess(out.index("ADDED FAILING ("), out.index("REMOVED ("))
+        self.assertNotIn("added test", out)
+        doc = json.loads(self.report(before, after, EXIT_REGRESSIONS, "json"))
+        self.assertEqual(doc["added_failing"], [{
+            "id": test_id, "before": None, "after": status,
+            "before_time": None, "after_time": None}])
+        self.assertEqual(doc["added"], [])
+        self.assertEqual(doc["summary"], {"regressions": 1, "improvements": 0})
+        self.assertEqual(doc["warnings"], NO_TIMES)
+        self.assertEqual(doc["schema"], "testdelta/1")
+        keys = list(doc)
+        self.assertEqual(keys[keys.index("newly_failing") + 1], "added_failing")
+
+    def test_junit_added_fail_error_xpass(self):
+        for status in ("fail", "error", "xpass"):
+            with self.subTest(status=status):
+                before = self.write("b.xml", fx.junit_simple([("t1", "pass")]))
+                after = self.write("a.xml", fx.junit_simple([("t1", "pass"), ("t2", status)]))
+                self.check_one(before, after, "pkg.mod.Class::t2", status)
+
+    def test_unittest_added_fail_error_xpass(self):
+        for status in ("fail", "error", "xpass"):
+            with self.subTest(status=status):
+                before = self.write("b.txt", fx.ut_simple([("test_a", "pass")]))
+                after = self.write("a.txt", fx.ut_simple([("test_a", "pass"),
+                                                          ("test_b", status)]))
+                self.check_one(before, after, "pkg.mod.Class.test_b", status)
+
+    def test_added_passing_and_failing_split(self):
         before = self.write("b.xml", fx.junit_simple([("t1", "pass")]))
         after = self.write("a.xml", fx.junit_simple(
             [("t1", "pass"), ("t2", "fail"), ("t3", "error"), ("t4", "pass")]))
-        out = self.report(before, after, EXIT_OK)
-        self.assertIn("  !!! 2 added tests fail\n", out)
-        self.assertIn("ADDED (3)", out)
-        self.assertIn("pkg.mod.Class::t2", out)
-        doc = json.loads(self.report(before, after, EXIT_OK, "json"))
-        self.assertEqual(doc["warnings"], ["2 added tests fail"] + NO_TIMES)
-        self.assertEqual(len(doc["added"]), 3)
+        out = self.report(before, after, EXIT_REGRESSIONS)
+        self.assertIn("ADDED FAILING (2)", out)
+        self.assertIn("ADDED (1)", out)
+        self.assertIn("RESULT WORSE: 2 regressions", out)
+        doc = json.loads(self.report(before, after, EXIT_REGRESSIONS, "json"))
+        self.assertEqual([i["id"] for i in doc["added_failing"]],
+                         ["pkg.mod.Class::t2", "pkg.mod.Class::t3"])
+        self.assertEqual([i["id"] for i in doc["added"]], ["pkg.mod.Class::t4"])
+        self.assertEqual(doc["summary"], {"regressions": 2, "improvements": 1})
+        self.assertEqual(doc["warnings"], NO_TIMES)
 
-    def test_unittest_added_failing_warns(self):
-        before = self.write("b.txt", fx.ut_simple([("test_a", "pass")]))
-        after = self.write("a.txt", fx.ut_simple([("test_a", "pass"), ("test_b", "xpass")]))
-        out = self.report(before, after, EXIT_OK)
-        self.assertIn("  !!! 1 added test fails\n", out)
-        self.assertNotIn("test_b fails", out)
-        doc = json.loads(self.report(before, after, EXIT_OK, "json"))
-        self.assertEqual(doc["warnings"], ["1 added test fails"] + NO_TIMES)
-        for warning in doc["warnings"]:
-            self.assertNotIn("test_b", warning)
-
-    def test_added_passing_tests_no_warning(self):
+    def test_added_passing_tests_stay_improvements_exit_0(self):
         before = self.write("b.xml", fx.junit_simple([("t1", "pass")]))
         after = self.write("a.xml", fx.junit_simple(
             [("t1", "pass"), ("t2", "pass"), ("t3", "skip")]))
         out = self.report(before, after, EXIT_OK)
+        self.assertIn("RESULT no regressions; 2 improvements.", out)
+        self.assertIn("ADDED FAILING (0)", out)
+        self.assertIn("ADDED (2)", out)
         self.assertNotIn("added test", out)
         self.assertNotIn("!!!", out)
         doc = json.loads(self.report(before, after, EXIT_OK, "json"))
+        self.assertEqual(doc["added_failing"], [])
         self.assertEqual(doc["warnings"], NO_TIMES)
+
+    def test_details_for_added_failing(self):
+        token = ss.GHP + "A1b2C3d4E5F6g7H8i9J0k1L2m3N4o5P6q7R8"
+        before = self.write("b.xml", fx.junit_simple([("t1", "pass")]))
+        after = self.write("a.xml", fx.junit_xml([
+            fx.junit_case("t1"),
+            fx.junit_case("t2", kind="fail", message="ADDMSG " + token + "\nADDSECOND",
+                          text="ADDTB line", system_out="ADDOUT " + token)]))
+        code, out, err = run([before, after])
+        self.assertEqual(code, EXIT_REGRESSIONS, err)
+        self.assertTrue(out)
+        for value in ("ADDMSG", "ADDTB", "ADDOUT", token):
+            self.assertNotIn(value, out)
+        code, out, err = run([before, after, "--details"])
+        self.assertEqual(code, EXIT_REGRESSIONS, err)
+        self.assertTrue(out)
+        self.assertIn("      message  ADDMSG <redacted>\n", out)
+        self.assertIn("      | ADDTB line\n", out)
+        for value in ("ADDSECOND", "ADDOUT", token):
+            self.assertNotIn(value, out)
+        code, out, err = run([before, after, "--details", "--format", "json"])
+        self.assertTrue(out)
+        item = json.loads(out)["added_failing"][0]
+        self.assertEqual(item["message"], "ADDMSG <redacted>")
+        self.assertEqual(item["traceback"], ["ADDTB line"])
+        self.assertEqual(item["traceback_omitted"], 0)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ counts are a list of {"status": ...} objects rather than status keys.
 
 By default only ids, statuses and times appear. --details adds the first
 message line and at most the last TRACEBACK_LINES traceback lines for newly
-failing tests only. Skip reasons and captured output are never stored, so
+failing and added failing tests only. Skip reasons and captured output are never stored, so
 never shown. The HTML report has a strict CSP, no scripts, links, images or
 event handlers, and values only ever land in text nodes. The current date or
 time never appears.
@@ -26,7 +26,7 @@ import json
 import re
 
 from testdelta._redact import redact
-from testdelta.compare import CATEGORIES, IMPROVEMENTS, REGRESSIONS, is_loud
+from testdelta.compare import CATEGORIES, DETAILED, IMPROVEMENTS, REGRESSIONS, is_loud
 from testdelta.readers import STATUSES
 
 FORMATS = ("text", "md", "html", "json")
@@ -35,6 +35,7 @@ TRACEBACK_LINES = 20
 
 TITLES = {
     "newly_failing": "Newly failing",
+    "added_failing": "Added failing",
     "removed": "Removed",
     "newly_skipped": "Newly skipped",
     "slower": "Slower",
@@ -167,7 +168,7 @@ def _render_text(delta, names, details, fail_on_slow):
         for c in changes:
             out.append(f"  {_status(c.before):>5} -> {_status(c.after):<5}  "
                        f"{_time(c.before_time):>9} -> {_time(c.after_time):<9}  {e(c.id)}")
-            if details and name == "newly_failing":
+            if details and name in DETAILED:
                 message, lines, omitted = detail(c)
                 out.append(f"      message  {e(message) if message else '(none)'}")
                 if omitted:
@@ -202,7 +203,7 @@ def _render_md(delta, names, details, fail_on_slow):
         for c in changes:
             out.append(f"- `{_status(c.before)} -> {_status(c.after)}` "
                        f"{_time(c.before_time)} -> {_time(c.after_time)} {e(c.id)}")
-            if details and name == "newly_failing":
+            if details and name in DETAILED:
                 message, lines, omitted = detail(c)
                 out.append(f"    - message: {e(message) if message else '(none)'}")
                 if omitted:
@@ -268,7 +269,7 @@ def _render_html(delta, names, details, fail_on_slow):
             out.append(f"<tr><td>{_status(c.before)}</td><td>{_status(c.after)}</td>"
                        f'<td class="n">{_time(c.before_time)}</td>'
                        f'<td class="n">{_time(c.after_time)}</td><td>{e(c.id)}</td></tr>')
-            if details and name == "newly_failing":
+            if details and name in DETAILED:
                 message, lines, omitted = detail(c)
                 note = f"... {omitted} earlier traceback lines omitted\n" if omitted else ""
                 out.append('<tr><td colspan="5">message: '
@@ -307,7 +308,7 @@ def _render_json(delta, names, details, fail_on_slow):
         "warnings": list(delta.warnings),
     }
     for name in CATEGORIES:
-        with_detail = details and name == "newly_failing"
+        with_detail = details and name in DETAILED
         doc[name] = [_json_change(c, with_detail) for c in delta.categories[name]]
     doc["duplicates"] = {"before": [redact(i) for i in delta.duplicates_before],
                          "after": [redact(i) for i in delta.duplicates_after]}

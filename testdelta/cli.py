@@ -26,8 +26,9 @@ EPILOG = """\
 exit codes:
   code  meaning
   0     no regressions
-  1     regressions: newly failing or erroring tests, removed tests, newly
-        skipped tests; slower tests only with --fail-on-slow
+  1     regressions: newly failing or erroring tests, added tests that fail,
+        removed tests, newly skipped tests; slower tests only with
+        --fail-on-slow
   2     usage error: unknown option, a bad number, --force without --output,
         or a refused --output
   4     input missing, unreadable, a symlink, empty, over --max-bytes, not a
