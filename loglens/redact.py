@@ -176,16 +176,16 @@ _RULES = [
     # E-mail addresses, so they are gone with --raw too; not URL userinfo.
     (re.compile(r"(?<![\w.+-])(?<!://)[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"),
      "<email>"),
-    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{10,}"), REDACTED),
-    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
-    (re.compile(r"\bsk-[A-Za-z0-9_-]{10,}"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{10,}"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{10,}"), REDACTED),
     # Provider token shapes, wherever they appear.
     (re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])"), REDACTED),
     (re.compile(r"(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}"), REDACTED),
     (re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}"), REDACTED),
     (re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}"), REDACTED),
     (re.compile(r"(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}"), REDACTED),
-    (re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), REDACTED),
+    (re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), REDACTED),
     # Card numbers inside runs of digit groups; see _cards.
     (re.compile(r"(?<![A-Za-z0-9])\d++(?:[ -]\d++)*+"), _cards),
 ]

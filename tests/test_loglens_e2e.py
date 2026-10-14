@@ -10,6 +10,7 @@ from pathlib import Path
 from loglens.cli import (EXIT_ERROR, EXIT_INPUT, EXIT_OK, EXIT_USAGE, EXIT_WARNING,
                          main)
 from tests import loglens_fixtures as fx
+from tests import secret_shapes as ss
 
 FORMATS = ("text", "md", "html")
 
@@ -246,6 +247,17 @@ class TestInputs(E2ETestCase):
         self.assertIn("after (1):\n     INFO     host app INFO c ok", c_block)
         self.assertIn("E      3  W      1", out)
         self.assertNotIn("SNTsecretC", out)
+
+    def test_token_glued_after_underscore_redacted(self):
+        # BRIEF-DEVWS-025; letters only, so normalise() cannot hide a leak.
+        token = ss.GHP + "SNTgluedLoglensToken"
+        log = fx.write_lines(self.logs, "glued.log", [
+            "2026-03-01T10:00:00Z ERROR deploy failed name_" + token])
+        code, out, err = run([log])
+        self.assertEqual(code, EXIT_ERROR, err)
+        self.assertTrue(out)
+        self.assertIn("deploy failed name_<redacted>", out)
+        self.assertNotIn("SNTgluedLoglensToken", out)
 
 
 if __name__ == "__main__":

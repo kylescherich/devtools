@@ -135,6 +135,9 @@ Log Lens redacts:
 - values of explicitly labelled personal fields (`phone`, `tel`, `mobile`,
   `dob`, `birth_date`, `ssn`, `patient_id`, `member_id`, `customer_id`, `mrn`).
 
+Provider tokens are also recognised when glued to a name with `_`
+(`key_<token>`, `test_with_<token>`) (BRIEF-DEVWS-025).
+
 It does **not** promise general PII redaction: free-text names and postal
 addresses are not detected. Do not run Log Lens on logs you would not show in
 a terminal.
@@ -313,6 +316,8 @@ read without guessing is refused. Every git call then gets an explicit
   counts only with `--authors`. Author e-mail addresses are never shown.
 - Everything gitarch prints or writes passes through the same redaction as
   Log Lens (see "What is redacted" above), with no way to turn it off.
+  A token glued to a name with `_` in a subject (`name_<token>`) is
+  redacted too (BRIEF-DEVWS-025).
 - File names, subjects and diff lines are escaped for the output format:
   control characters as `\xNN`, bidi and line-separator characters as
   `\uXXXX`; the HTML report has a strict Content-Security-Policy and no
@@ -465,8 +470,7 @@ ever has these keys. Ids, names and details are redacted (see below).
   a traceback is redacted as a whole before it is cut to 20 lines, so a
   multi-line secret is never split. Test names are untrusted input and are
   redacted too: `test_login[<token>]` loses the token. A token glued to a
-  name with an underscore (`test_with_<token>`) is not recognised, as in
-  Log Lens.
+  name with `_` (`test_with_<token>`) is redacted too (BRIEF-DEVWS-025).
 - Test names are escaped for the output format: control characters as
   `\xNN`, bidi and line-separator characters as `\uXXXX`, a literal
   backslash doubled in text and Markdown; the HTML report is one file with

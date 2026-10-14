@@ -2,8 +2,8 @@
 
 ## Status: Test Delta M1 (BRIEF-DEVWS-024 / DEC-226, branch devtools/testdelta-m1, no PR)
 - Tasks 1-5 done, one commit each: bootstrap (package, console script, _redact.py byte copy + identity test, six-package no-cross-import test, CLAUDE.md rules); readers (JUnit XML with DOCTYPE/ENTITY and non-UTF-8 refusal before ElementTree, unittest -v 3.11+/older forms, docstring lines, subtests, setUpClass, FAIL/ERROR blocks, 3.12 --durations; times never invented); comparison (newly failing / removed / newly skipped regressions, fixed / unskipped / added, still failing, other changes, slower/faster with ratio AND minimum, n/a never 0, total-count-drop warning); reports text/md/html/json (per-value redact then escape, final redact pass a tested no-op, --details for newly failing only, traceback redacted then capped at 20 lines, JSON schema testdelta/1); CLI exit codes 0/1/2/4 (2 > 4 > 1 > 0), --fail-on-slow, --output guards (no overwrite without --force, no symlink, never an input).
-- Tests: 590 in total (was 444); both interpreters OK. Real unittest -v output of the running interpreter is parsed in a test (format drift guard; 3.13 covered by CI only).
-- Known limitation: a token glued to a test name with an underscore (test_with_<token>) is not redacted; the loglens rules treat "_" as part of a word.
+- Tests: 595 in total (590 after BRIEF-DEVWS-024, was 444); both interpreters OK. Real unittest -v output of the running interpreter is parsed in a test (format drift guard; 3.13 covered by CI only).
+- Fixed (BRIEF-DEVWS-025): a token glued to a name with an underscore (test_with_<token>, key_<token>) is now redacted in loglens, gitarch and testdelta; the four provider rules that started with \b now use (?<![A-Za-z0-9]).
 
 ### Next (Test Delta)
 - Kyle runs the acceptance runs (task 6); then the PR, ending "Do not merge until the Hub names the head hash (BRIEF-DEVWS-024)".
