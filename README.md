@@ -376,14 +376,21 @@ must be the same format.
   `skipped` is skip; pytest's `skipped type="pytest.xfail"` is xfail and a
   strict xpass (`failure message="[XPASS(strict)] ..."`) is xpass. Times
   come from the `time` attribute; a missing, negative or non-numeric time is
-  n/a.
+  n/a. The `tests`/`failures`/`errors`/`skipped` attributes of every
+  `testsuite` and `testsuites` and any `error`/`failure` element outside a
+  `testcase` are read for the report-level check below.
 - **unittest -v text** (what `python -m unittest -v` writes to stderr):
   result lines `test_x (pkg.mod.Class.test_x) ... ok` (3.11 and later) and
   the older `test_x (pkg.mod.Class) ... ok`; a docstring description on its
   own line before ` ... ok`; test output printed between the test name and
   its status; subtests (folded into their test with the worst status);
   `setUpClass`/`setUpModule` errors; the `FAIL:` / `ERROR:` /
-  `UNEXPECTED SUCCESS:` blocks. The id is `pkg.mod.Class.test_x`. unittest
+  `UNEXPECTED SUCCESS:` blocks; the `Ran N tests` line and the final
+  `OK (...)` / `FAILED (...)` line. Test names may contain ` ... `, `(` and
+  `)` (real unittest prints them): the status is found from the right end
+  of the line, then the id from the last parenthesised group before it that
+  names the test; a docstring line is always the description of the test
+  above it. The id is `pkg.mod.Class.test_x`. unittest
   text has no times, except for the tests listed by Python 3.12's
   `--durations N`; every other time is n/a. A time is never invented.
   Accepted false regression (safe side): when a result line has output
@@ -394,6 +401,14 @@ must be the same format.
   (unexpected success). A test id that appears twice in one file is warned
   about and keeps its worst status (error > fail > xpass > skip > xfail >
   pass).
+- Report-level check: a file whose own counts say the run failed (JUnit
+  `failures`/`errors` above 0 on a suite, or a suite-level `error`/`failure`
+  element; a unittest `FAILED (...)` line) but in which no fail, error or
+  xpass test can be identified is refused with exit 4: "report says the run
+  failed but no failing test could be identified". A failed run never ends
+  in exit 0. Any other difference between the declared and the parsed
+  counts (subtests counted separately by unittest, skips, ...) is a loud
+  warning listing both; the exit code is unchanged.
 
 ## What the report shows
 
@@ -420,9 +435,21 @@ the same rule in reverse. An n/a time is never treated as 0, so a test
 without both times is never slower or faster.
 
 Warnings: the total test count dropping comes first and loud
-(`!!! total test count dropped from N to M`); then duplicate ids, tests that
-started without a status (a truncated log), and a side with no times at
-all. Warnings hold counts only; the ids are listed after them.
+(`!!! total test count dropped from N to M`); then, per side, duplicate ids,
+tests that started without a status (a truncated log), a unittest log with
+no `Ran N tests` summary (loud: `no summary line: the log may be
+truncated`) and declared-vs-parsed count mismatches (loud: `report declares
+... ; parsed ...`, or `report has N suite-level error/failure elements not
+tied to any test`); then added tests that fail (loud: `N added tests fail`;
+they stay under Added and do not change the exit code); then a side with no
+times at all. Loud warnings are `!!!` in text, bold in Markdown and
+highlighted in HTML. Warnings hold counts only; the ids are listed after
+them.
+
+Known limit: if a log is cut so that the only evidence of a failure (its
+status word and its `FAIL:` block) is gone and the test was the last one,
+the cut log cannot be told apart from a passing one; the loud
+`no summary line` warning is then the signal.
 
 Reports are reproducible: the same inputs and arguments give byte-identical
 output in every format; the current date or time never appears.
@@ -461,6 +488,8 @@ when n/a. With `--details`, `newly_failing` items also carry `"message"`
 (first line or `null`), `"traceback"` (at most 20 lines) and
 `"traceback_omitted"` (the number of earlier lines left out); no other item
 ever has these keys. Ids, names and details are redacted (see below).
+`warnings` holds the same strings as the other formats (the report-level
+check only adds new strings; the schema stays `testdelta/1`).
 `summary.regressions` counts slower tests only with `--fail-on-slow`.
 
 ## Privacy defaults
@@ -509,4 +538,4 @@ When several apply, the leftmost wins: 2 > 4 > 1 > 0.
 | 0 | no regressions |
 | 1 | regressions: newly failing or erroring tests, removed tests, newly skipped tests; slower tests only with `--fail-on-slow` |
 | 2 | usage error: unknown option, a bad number, `--force` without `--output`, or a refused `--output` |
-| 4 | input missing, unreadable, a symlink or directory, empty, over `--max-bytes`, not UTF-8, not a recognised format, the two inputs in different formats, malformed XML, or XML with a DOCTYPE or ENTITY declaration (refused unparsed) |
+| 4 | input missing, unreadable, a symlink or directory, empty, over `--max-bytes`, not UTF-8, not a recognised format, the two inputs in different formats, malformed XML, XML with a DOCTYPE or ENTITY declaration (refused unparsed), or a report that says the run failed but names no failing test |
