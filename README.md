@@ -187,6 +187,9 @@ Details:
 - Accepted over-redaction: `auth: login ok` becomes `auth: <redacted> ok`
   (DEC-183), and e-mail-like service identities
   (`svc-deploy@proj.iam.example.test`) become `<email>` like any address.
+  Long `sk-...` words are redacted on purpose, also after `_`, `-` or `/`
+  (`build_sk-checkpoint` becomes `build_<redacted>`): privacy over fidelity
+  (BRIEF-DEVWS-026).
 - Provider token shapes anywhere: AWS (`AKIA`/`ASIA`), Slack (`xox?-`),
   GitLab (`glpat-`), Google (`AIza`), Stripe (`sk_live_`, `rk_test_`, ...),
   GitHub (`ghp_` ..., `github_pat_`), `sk-`; JWTs; PEM blocks.
@@ -475,6 +478,8 @@ ever has these keys. Ids, names and details are redacted (see below).
   multi-line secret is never split. Test names are untrusted input and are
   redacted too: `test_login[<token>]` loses the token. A token glued to a
   name with `_` (`test_with_<token>`) is redacted too (BRIEF-DEVWS-025).
+  Long `sk-...` words in test names are redacted on purpose
+  (`test_build_sk-checkpoint` shows as `test_build_<redacted>`).
 - Test names are escaped for the output format: control characters as
   `\xNN`, bidi and line-separator characters as `\uXXXX`, a literal
   backslash doubled in text and Markdown; the HTML report is one file with
