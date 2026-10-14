@@ -10,6 +10,12 @@ Inputs are read without following symlinks, refused over max_bytes before
 reading, and must be UTF-8. XML containing a DOCTYPE or ENTITY declaration,
 or declaring another encoding, is refused before it reaches the parser.
 Error messages never quote input content.
+
+The report-level counts (JUnit suite attributes and suite-level error or
+failure elements, the unittest "Ran N tests" line and its OK / FAILED
+footer) are checked against the parsed results: a report that says the run
+failed but names no failing test is refused; other mismatches and a missing
+unittest summary become warnings.
 """
 import math
 import os
@@ -51,6 +57,34 @@ class Run:
     duplicates: tuple = ()      # ids seen more than once (worst status kept)
     unresolved: tuple = ()      # unittest ids started but with no status
     has_durations: bool = False
+    failed_signal: bool = False  # the report itself says the run failed
+    summary: bool = True        # unittest: "Ran N tests" and its footer seen
+    checks: tuple = ()          # declared-vs-parsed mismatches (warnings)
+
+
+REFUSED_FAILED = "report says the run failed but no failing test could be identified"
+
+
+def check_consistency(run):
+    """A report that says the run failed must name a failing test: else the
+    input is refused, never compared (a failed run never exits 0)."""
+    if run.failed_signal and not any(r.status in BAD for r in run.results.values()):
+        raise InputError(REFUSED_FAILED)
+    return run
+
+
+def _plural(count, word):
+    return f"{count} {word}" if count == 1 else f"{count} {word}s"
+
+
+def _mismatch(declared, parsed):
+    """A check naming declared vs parsed counts, or None when they agree."""
+    if all(declared[key] == parsed[key] for key in declared):
+        return None
+    keys = [key for key in parsed if key in declared
+            and (key == "tests" or declared[key] or parsed[key])]
+    return ("report declares " + " ".join(f"{k}={declared[k]}" for k in keys)
+            + "; parsed " + " ".join(f"{k}={parsed[k]}" for k in keys))
 
 
 # --- reading ----------------------------------------------------------------
@@ -106,7 +140,8 @@ def detect(text):
 def load(path, input_format=None, max_bytes=DEFAULT_MAX_BYTES):
     text = decode(read_bounded(path, max_bytes))
     fmt = input_format or detect(text)
-    return parse_junit(text) if fmt == "junit" else parse_unittest(text)
+    run = parse_junit(text) if fmt == "junit" else parse_unittest(text)
+    return check_consistency(run)
 
 
 def load_pair(before, after, input_format=None, max_bytes=DEFAULT_MAX_BYTES):
@@ -220,7 +255,63 @@ def parse_junit(text):
         prefix = case.get("classname") or case.get("file") or ""
         test_id = f"{prefix}::{name}" if prefix else name
         collector.add(test_id, _junit_result(case))
-    return Run("junit", collector.results, tuple(sorted(collector.duplicates)))
+    failed_signal, checks = _junit_consistency(root)
+    return Run("junit", collector.results, tuple(sorted(collector.duplicates)),
+               failed_signal=failed_signal, checks=checks)
+
+
+_JUNIT_COUNTS = ("tests", "failures", "errors", "skipped")
+
+
+def _count_attrs(element):
+    """The non-negative integer count attributes of a suite element."""
+    out = {}
+    for key in _JUNIT_COUNTS:
+        try:
+            value = int(element.get(key))
+        except (TypeError, ValueError):
+            continue
+        if value >= 0:
+            out[key] = value
+    return out
+
+
+def _junit_consistency(root):
+    """(failed signal, checks): suite attributes and suite-level error and
+    failure elements (outside any testcase) against the testcases."""
+    suites, cases, loose = [], [], 0
+    stack = [root]
+    while stack:
+        element = stack.pop()
+        if element.tag == "testcase":
+            cases.append(element)
+            continue
+        if element.tag in ("testsuite", "testsuites"):
+            suites.append(element)
+        for child in element:
+            if child.tag in ("error", "failure"):
+                loose += 1
+            else:
+                stack.append(child)
+    failed_signal = loose > 0 or any(
+        _count_attrs(s).get("failures", 0) > 0 or _count_attrs(s).get("errors", 0) > 0
+        for s in suites)
+    declared = _count_attrs(root) if root.tag == "testsuites" else {}
+    if not declared:
+        outer = [root] if root.tag == "testsuite" else [s for s in root if s.tag == "testsuite"]
+        counts = [_count_attrs(s) for s in outer]
+        declared = {key: sum(c[key] for c in counts) for key in _JUNIT_COUNTS
+                    if counts and all(key in c for c in counts)}
+    tags = [{child.tag for child in case} for case in cases]
+    parsed = {"tests": len(cases),
+              "failures": sum("failure" in t for t in tags),
+              "errors": sum("error" in t for t in tags),
+              "skipped": sum("skipped" in t for t in tags)}
+    checks = [_mismatch(declared, parsed)]
+    if loose:
+        checks.append(f"report has {_plural(loose, 'suite-level error/failure element')} "
+                      "not tied to any test")
+    return failed_signal, tuple(c for c in checks if c)
 
 
 # --- unittest -v text -------------------------------------------------------
@@ -235,7 +326,14 @@ _SKIPPED = re.compile(r"skipped(?: .*)?")
 _SHORT_WHERE = re.compile(r"([A-Za-z_][\w.]*)\)(.*)")
 _TAIL = re.compile(r"(?: \[.*\])?(?: \(.*\))?")
 _DURATION = re.compile(r"(\d+(?:\.\d+)?)s\s+(.*)")
-_RAN = re.compile(r"Ran \d+ tests? in ")
+_RAN = re.compile(r"Ran (\d+) tests? in ")
+_FOOTER = re.compile(r"(OK|FAILED)(?: \((.*)\))?|NO TESTS RAN")
+_FOOTER_ITEM = re.compile(r"(failures|errors|skipped|expected failures|"
+                          r"unexpected successes)=(\d+)")
+# Footer counts and the parsed status each one is checked against.
+_FOOTER_STATUS = {"failures": "fail", "errors": "error", "skipped": "skip",
+                  "expected failures": "xfail", "unexpected successes": "xpass"}
+_FIXTURES = frozenset({"setUpClass", "tearDownClass", "setUpModule", "tearDownModule"})
 _MODULE_FIXTURES = {"setUpModule", "tearDownModule"}
 _CAPTURED = {"Stdout:", "Stderr:"}
 _SEP = " ... "
@@ -375,6 +473,8 @@ def parse_unittest(text):
     pending = None              # started, status still to come
     doc = None                  # head printed, docstring line next
     glued = None                # (id, target) whose status followed output
+    footers = []                # (ran, (failed, {key: count})) per run
+    truncated = False           # a "Ran N tests" line without its footer
     started = []
     recognised = False
     i = 0
@@ -405,9 +505,15 @@ def parse_unittest(text):
             i = _read_durations(lines, i, durations)
             pending = doc = glued = None
             continue
-        if _RAN.match(line):
+        ran = _RAN.match(line)
+        if ran:
             recognised = True
             pending = doc = glued = None
+            footer = _read_footer(lines, i)
+            if footer is not None:
+                footers.append((int(ran.group(1)), footer))
+            else:
+                truncated = True
             continue
         if doc is not None and _SEP in line:
             # Docstring form: this line is the description, whatever it
@@ -469,5 +575,39 @@ def parse_unittest(text):
         if len(line_status.get(test_id, [])) > 1:
             collector.duplicates.add(test_id)
     unresolved = sorted(set(started) - set(collector.results))
+    failed_signal, checks = _unittest_consistency(collector.results, footers)
     return Run("unittest", collector.results, tuple(sorted(collector.duplicates)),
-               tuple(unresolved), bool(durations))
+               tuple(unresolved), bool(durations), failed_signal,
+               bool(footers) and not truncated, checks)
+
+
+def _read_footer(lines, i):
+    """(failed, {key: count}) from the first non-blank line at or after i,
+    or None when it is not an OK / FAILED / NO TESTS RAN footer."""
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    match = _FOOTER.fullmatch(lines[i]) if i < len(lines) else None
+    if match is None:
+        return None
+    counts = {key: 0 for key in _FOOTER_STATUS}
+    for key, value in _FOOTER_ITEM.findall(match.group(2) or ""):
+        counts[key] += int(value)
+    return match.group(1) == "FAILED", counts
+
+
+def _unittest_consistency(results, footers):
+    """(failed signal, checks): the summed footers against the parsed
+    results. Class and module fixtures are not counted in 'Ran N'."""
+    if not footers:
+        return False, ()
+    declared = {"tests": sum(ran for ran, _ in footers)}
+    for key in _FOOTER_STATUS:
+        declared[key] = sum(counts[key] for _, (_, counts) in footers)
+    failed_signal = (any(failed for _, (failed, _) in footers)
+                     or declared["failures"] > 0 or declared["errors"] > 0)
+    parsed = {"tests": sum(test_id.rpartition(".")[2] not in _FIXTURES
+                           for test_id in results)}
+    for key, status in _FOOTER_STATUS.items():
+        parsed[key] = sum(r.status == status for r in results.values())
+    check = _mismatch(declared, parsed)
+    return failed_signal, (check,) if check else ()

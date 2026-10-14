@@ -75,17 +75,43 @@ def ut_durations(pairs):
     return out + [""]
 
 
-def ut_footer(count, ok=True):
-    return [SEP_DASH, f"Ran {count} tests in 0.123s", "", "OK" if ok else "FAILED"]
+def ut_footer(count, ok=True, final=None):
+    """The dash line, "Ran N tests" and the final OK / FAILED line."""
+    if final is None:
+        final = "OK" if ok else "FAILED"
+    return [SEP_DASH, f"Ran {count} tests in 0.123s", "", final]
 
 
-def unittest_log(lines, blocks=(), durations=None, count=None, newline="\n"):
+def ut_final(lines, blocks):
+    """The final line real unittest prints for these lines and blocks:
+    FAILED/OK with failures, errors, skipped, expected failures and
+    unexpected successes, in unittest's order, zero counts left out."""
+    heads = [block[1] for block in blocks]
+    counts = [("failures", sum(h.startswith("FAIL: ") for h in heads)),
+              ("errors", sum(h.startswith("ERROR: ") for h in heads)),
+              ("skipped", sum(" ... skipped" in line for line in lines)),
+              ("expected failures", sum(line.endswith(" ... expected failure")
+                                        for line in lines)),
+              ("unexpected successes", sum(h.startswith("UNEXPECTED SUCCESS: ")
+                                           for h in heads))]
+    failed = counts[0][1] or counts[1][1] or counts[4][1]
+    items = ", ".join(f"{key}={value}" for key, value in counts if value)
+    word = "FAILED" if failed else "OK"
+    return f"{word} ({items})" if items else word
+
+
+def unittest_log(lines, blocks=(), durations=None, count=None, newline="\n",
+                 footer=True):
+    """footer: True for the real footer, False for none (a truncated log),
+    or a string for the final line."""
     out = list(lines) + [""]
     for block in blocks:
         out += block
     if durations is not None:
         out += ut_durations(durations)
-    out += ut_footer(len(lines) if count is None else count)
+    if footer is not False:
+        final = ut_final(lines, blocks) if footer is True else footer
+        out += ut_footer(len(lines) if count is None else count, final=final)
     return newline.join(out) + newline
 
 
@@ -134,9 +160,13 @@ def junit_case(name, classname="pkg.mod.Class", time="0.010", kind=None,
 
 
 def junit_xml(cases, root="testsuites", decl=True):
+    """The suite counts are those of the cases, as pytest writes them."""
     out = ['<?xml version="1.0" encoding="utf-8"?>'] if decl else []
-    suite = (f'<testsuite name="pytest" errors="0" failures="0" skipped="0" '
-             f'tests="{len(cases)}" time="1.000">')
+    errors = sum("<error" in case for case in cases)
+    failures = sum("<failure" in case for case in cases)
+    skipped = sum("<skipped" in case for case in cases)
+    suite = (f'<testsuite name="pytest" errors="{errors}" failures="{failures}" '
+             f'skipped="{skipped}" tests="{len(cases)}" time="1.000">')
     if root == "testsuites":
         out += ["<testsuites>", suite]
     else:

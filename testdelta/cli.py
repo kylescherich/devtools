@@ -32,7 +32,8 @@ exit codes:
         or a refused --output
   4     input missing, unreadable, a symlink, empty, over --max-bytes, not a
         recognised format, the two inputs in different formats, malformed
-        XML, or XML with a DOCTYPE or ENTITY declaration (refused unparsed)
+        XML, XML with a DOCTYPE or ENTITY declaration (refused unparsed), or
+        a report that says the run failed but names no failing test
 
 testdelta never runs tests. It reads the two inputs and writes only --output.
 By default the report holds test ids, statuses and times only: no failure

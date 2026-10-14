@@ -26,7 +26,7 @@ import json
 import re
 
 from testdelta._redact import redact
-from testdelta.compare import CATEGORIES, IMPROVEMENTS, REGRESSIONS
+from testdelta.compare import CATEGORIES, IMPROVEMENTS, REGRESSIONS, is_loud
 from testdelta.readers import STATUSES
 
 FORMATS = ("text", "md", "html", "json")
@@ -152,7 +152,7 @@ def _render_text(delta, names, details, fail_on_slow):
     if delta.warnings:
         out.append("WARNINGS")
         for warning in delta.warnings:
-            loud = "!!! " if warning.startswith("total test count dropped") else "! "
+            loud = "!!! " if is_loud(warning) else "! "
             out.append(f"  {loud}{warning}")
         out += [f"  - {label}  {e(value)}" for label, value in _id_notes(delta)]
     else:
@@ -185,7 +185,7 @@ def _render_md(delta, names, details, fail_on_slow):
     out += ["", f"**Result**: {summary(delta, fail_on_slow)}", "", "## Warnings", ""]
     if delta.warnings:
         for warning in delta.warnings:
-            if warning.startswith("total test count dropped"):
+            if is_loud(warning):
                 out.append(f"- **WARNING: {warning}**")
             else:
                 out.append(f"- {warning}")
@@ -244,7 +244,7 @@ def _render_html(delta, names, details, fail_on_slow):
     if delta.warnings:
         out.append("<ul>")
         for warning in delta.warnings:
-            loud = warning.startswith("total test count dropped")
+            loud = is_loud(warning)
             out.append(f'<li class="loud">WARNING: {warning}</li>' if loud
                        else f"<li>{warning}</li>")
         out += [f"<li>{label}: {e(value)}</li>" for label, value in _id_notes(delta)]
