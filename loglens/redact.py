@@ -104,7 +104,12 @@ def _is_card(groups, seps):
 def _cards(match):
     """Redact each card number in a run of digit groups. A card must not touch
     another digit or a letter, so a run followed by a letter cannot end one."""
-    parts = re.split(r"([ -])", match.group(0))
+    run = match.group(0)
+    # The run is digits, " " and "-" only; under 13 digits no card fits, and
+    # the loop below would rebuild the run unchanged.
+    if len(run) - run.count(" ") - run.count("-") < 13:
+        return run
+    parts = re.split(r"([ -])", run)
     groups, seps = parts[0::2], parts[1::2]
     end = len(groups) - (1 if match.string[match.end():match.end() + 1].isalpha() else 0)
     out, i = [], 0
@@ -134,35 +139,103 @@ def _keep_quotes(match):
     return match.group(1) + quote + REDACTED + quote
 
 
-# (pattern, replacement) in order; replacements keep the label, drop the value.
+# Pre-checks (BRIEF-DEVWS-027). A gate is a NECESSARY condition of its rule's
+# regex: when it is false the rule cannot match, so skipping it changes
+# nothing. Gates run on the text as earlier rules left it. A gate made of
+# letters is a plain "in" only for a case-sensitive rule; (?i) rules are gated
+# by case-free literals or by a (?i) search, never by str.lower(), because
+# (?i) also matches U+017F for "s" and U+212A for "k".
+def _has(*literals):
+    if len(literals) == 1:
+        literal, = literals
+        return lambda text: literal in text
+    return lambda text: any(literal in text for literal in literals)
+
+
+def _has_colon_or_equals(text):
+    return ":" in text or "=" in text
+
+
+# Word gates: every keyword alternative of the rule contains one of these
+# words; compiled with the rule's own (?i), so case folding is the same.
+# tests/test_redact_gates.py enumerates the alternatives and checks.
+# Hub-visible addition beyond the pre-checks listed in BRIEF-DEVWS-027.
+def _word_gate(words):
+    """A (?i) search for any of words. Grouped by first letter, which re runs
+    about twice as fast as one flat alternation; same set of matches."""
+    by_first = {}
+    for word in words:
+        by_first.setdefault(word[0], []).append(word[1:])
+    return re.compile(r"(?i)" + "|".join(
+        first + "(?:" + "|".join(rests) + ")" for first, rests in by_first.items())).search
+
+
+_MULTI_WORDS = ("pass", "secret", "credential")
+_PERSONAL_WORDS = ("phone", "tel", "mobile", "dob", "birth", "ssn", "patient",
+                   "member", "customer", "mrn")
+# "key" covers api_key, private_key, access_key and account_key.
+_KEY_WORDS = (_MULTI_WORDS + ("token", "key", "sig", "csrf", "xsrf", "cookie",
+                              "pwd", "auth", "sess", "sid") + _PERSONAL_WORDS)
+_MULTI_GATE = _word_gate(_MULTI_WORDS)
+_MULTI_KEYS_GATE = _word_gate(_MULTI_WORDS + _PERSONAL_WORDS)
+_KEYS_GATE = _word_gate(_KEY_WORDS)
+# At least 13 \d (Unicode, as in the card rule) anywhere; match, not search,
+# so a long text without them is scanned once.
+_13_DIGITS = re.compile(r"(?:\D*+\d){13}").match
+
+
+def _multi_keys_gate(text):
+    return _has_colon_or_equals(text) and _MULTI_KEYS_GATE(text) is not None
+
+
+def _keys_gate(text):
+    return _has_colon_or_equals(text) and _KEYS_GATE(text) is not None
+
+
+# (gate, pattern, replacement) in order; replacements keep the label, drop the
+# value. A gate of None means the rule always runs.
 _RULES = [
     # PEM blocks, including ones split over continuation lines or cut short.
-    (re.compile(r"-----BEGIN [A-Z0-9 ]*-----.*?(?:-----END [A-Z0-9 ]*-----|\Z)",
+    # Gate: the regex starts with this literal; case-sensitive rule.
+    (_has("-----BEGIN "),
+     re.compile(r"-----BEGIN [A-Z0-9 ]*-----.*?(?:-----END [A-Z0-9 ]*-----|\Z)",
                 re.DOTALL), REDACTED),
     # Authorization header value (any scheme), plain or quoted.
-    (re.compile(r"(?i)(authorization[\"']?\s*+[:=]\s*+[\"']?+)" + _DONE_AUTH
+    # Gate: the regex needs [:=]; case-free literals in a (?i) rule.
+    (_has_colon_or_equals,
+     re.compile(r"(?i)(authorization[\"']?\s*+[:=]\s*+[\"']?+)" + _DONE_AUTH
                 + _KEEP_LINE + r"[^\"'\r\n]+"),
      r"\1" + REDACTED),
     # Cookie: / Set-Cookie: / cookie= values run to the end of the line; a
     # quoted value is left to the key rule below.
-    (re.compile(r"(?i)(" + _ID_START + r"(?:set-)?cookie[\"']?[ \t]*+[:=][ \t]*+)"
+    # Gate: the regex needs [:=]; case-free literals in a (?i) rule.
+    (_has_colon_or_equals,
+     re.compile(r"(?i)(" + _ID_START + r"(?:set-)?cookie[\"']?[ \t]*+[:=][ \t]*+)"
                 + _DONE_AUTH + _KEEP_LINE + r"(?=[^\"'\s])[^\r\n]+"),
      r"\1" + REDACTED),
     # "Basic <token>" / "Bearer <token>" anywhere; see _SCHEME_TOKEN.
-    (re.compile(r"(?i)(\b(?:basic|bearer)[ \t]++)" + _SCHEME_TOKEN), r"\1" + REDACTED),
+    (None,
+     re.compile(r"(?i)(\b(?:basic|bearer)[ \t]++)" + _SCHEME_TOKEN), r"\1" + REDACTED),
     # Multi-word values: "password=my secret phrase user=bob" keeps user=bob.
-    (re.compile(r"(?i)(" + _MULTI_KEYS + r"[\"']?\s*+[:=][ \t]*+)" + _DONE_MULTI
+    # Gate: the regex needs [:=] (case-free) and a _MULTI or _PERSONAL word
+    # ((?i) word gate, see above).
+    (_multi_keys_gate,
+     re.compile(r"(?i)(" + _MULTI_KEYS + r"[\"']?\s*+[:=][ \t]*+)" + _DONE_MULTI
                 + _KEEP_MULTI + r"(?=[^\"'\s])[^\r\n]+?" + _MULTI_END),
      r"\1" + REDACTED),
     # Spoken forms: "password is X", "credentials were X" -> next token.
-    (re.compile(r"(?i)(" + _ID_START + _ID + r"*?" + _MULTI + _ID
+    # Gate: the regex needs a _MULTI word ((?i) word gate); it has no [:=].
+    (_MULTI_GATE,
+     re.compile(r"(?i)(" + _ID_START + _ID + r"*?" + _MULTI + _ID
                 + r"*+[ \t]++(?:is|was|were|are)[ \t]++)" + _DONE_KEY + _KEEP_VALUE
                 + r"(?:(?P<q2>\")(?:[^\"\\\r\n]|\\.)*\"|(?P<q1>')(?:[^'\\\r\n]|\\.)*'"
                 r"|[^\s,;&\"'}\]]+)"),
      _keep_quotes),
     # key=value, key: value, "key": "value", 'key': 'value' (quotes kept). A
     # scheme word before the value ("X-Auth: Bearer abc") goes with it.
-    (re.compile(r"(?i)(" + _KEYS + r"[\"']?\s*+[:=]\s*+)" + _DONE_KEY + _KEEP_VALUE
+    # Gate: the regex needs [:=] (case-free) and a _KEYS word ((?i) word gate).
+    (_keys_gate,
+     re.compile(r"(?i)(" + _KEYS + r"[\"']?\s*+[:=]\s*+)" + _DONE_KEY + _KEEP_VALUE
                 + r"(?:(?:basic|bearer|digest|token)[ \t]++(?=[^\s,;&\"'}\]]))?"
                 + r"(?:(?P<q2>\")(?:[^\"\\\r\n]|\\.)*\"|(?P<q1>')(?:[^'\\\r\n]|\\.)*'"
                 r"|[^\s,;&\"'}\]]+)"),
@@ -170,30 +243,49 @@ _RULES = [
     # URL userinfo with a password (any scheme): scheme://user:secret@host ->
     # scheme://<redacted>@host; ssh://git@host stays. Runs before the e-mail
     # rule so "user:secret@host" is not taken for an address.
-    (re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)(?!" + _MARK + r"@)"
+    # Gate: the regex needs "://" and "@"; case-free literals.
+    (lambda text: "@" in text and "://" in text,
+     re.compile(r"\b([A-Za-z][A-Za-z0-9+.-]*://)(?!" + _MARK + r"@)"
                 r"(?=[^\s/?#\"'<>:@]*+:)[^\s/?#\"'<>]+@"),
      r"\1" + REDACTED + "@"),
     # E-mail addresses, so they are gone with --raw too; not URL userinfo.
-    (re.compile(r"(?<![\w.+-])(?<!://)[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"),
+    # Gate: the regex needs "@"; case-free literal.
+    (_has("@"),
+     re.compile(r"(?<![\w.+-])(?<!://)[\w.+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\b"),
      "<email>"),
-    (re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{10,}"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{10,}"), REDACTED),
+    # Gates of the provider rules: the literal prefix the regex requires;
+    # every provider rule is case-sensitive.
+    (_has("github_pat_"),
+     re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{10,}"), REDACTED),
+    (_has("ghp_", "gho_", "ghu_", "ghs_", "ghr_"),
+     re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{10,}"), REDACTED),
+    (_has("sk-"),
+     re.compile(r"(?<![A-Za-z0-9])sk-[A-Za-z0-9_-]{10,}"), REDACTED),
     # Provider token shapes, wherever they appear.
-    (re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}"), REDACTED),
-    (re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"), REDACTED),
+    (_has("AKIA", "ASIA"),
+     re.compile(r"(?<![A-Za-z0-9])(?:AKIA|ASIA)[A-Z0-9]{16}(?![A-Za-z0-9])"), REDACTED),
+    (_has("xox"),
+     re.compile(r"(?<![A-Za-z0-9])xox[abposr]-[A-Za-z0-9-]{10,}"), REDACTED),
+    (_has("glpat-"),
+     re.compile(r"(?<![A-Za-z0-9])glpat-[A-Za-z0-9_-]{20,}"), REDACTED),
+    (_has("AIza"),
+     re.compile(r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}"), REDACTED),
+    (_has("sk_", "rk_"),
+     re.compile(r"(?<![A-Za-z0-9])(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{10,}"), REDACTED),
+    (_has("eyJ"),
+     re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*"),
+     REDACTED),
     # Card numbers inside runs of digit groups; see _cards.
-    (re.compile(r"(?<![A-Za-z0-9])\d++(?:[ -]\d++)*+"), _cards),
+    # Gate: a card has 13-19 \d; case-free.
+    (_13_DIGITS,
+     re.compile(r"(?<![A-Za-z0-9])\d++(?:[ -]\d++)*+"), _cards),
 ]
 
 
 def redact(text: str) -> str:
-    for pattern, replacement in _RULES:
-        text = pattern.sub(replacement, text)
+    for gate, pattern, replacement in _RULES:
+        if gate is None or gate(text):
+            text = pattern.sub(replacement, text)
     return text
 
 

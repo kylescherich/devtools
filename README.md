@@ -199,6 +199,27 @@ Details:
   skipped, never consumed ("basic Basic <token>" is caught); the whole
   `Authorization:` value always.
 
+### Redaction speed (BRIEF-DEVWS-027)
+
+Each redaction rule first runs a cheap pre-check that is a necessary condition
+of its pattern (for example: no `@` means no e-mail address can match), so a
+rule that cannot match is skipped. The output is byte-identical to the
+redaction before this change; `tests/test_redact_differential.py` compares
+both on 54,454 inputs. Privacy behaviour is unchanged.
+
+Timing on a 20 MB synthetic log of ordinary lines (219,458 lines, seed 27),
+median of 3 runs, `python3 -I scripts/redact_bench.py`:
+
+| | Python 3.12 before | after | speed-up | Python 3.11 before | after | speed-up |
+| --- | --- | --- | --- | --- | --- | --- |
+| `redact()` alone | 11.48 s | 4.15 s | 2.8x | 11.84 s | 4.47 s | 2.6x |
+| loglens end to end | 12.02 s | 6.34 s | 1.9x | 12.58 s | 6.31 s | 2.0x |
+
+The 2x target is met for `redact()` itself. End to end is about 1.9x on 3.12
+and 2.0x on 3.11, because reading the log and normalising messages are outside
+this brief and now take most of the remaining time. No timing is asserted in
+CI.
+
 ## Exit codes
 
 When several apply, the leftmost wins: 2 > 3 > 4 > 1 > 0.
