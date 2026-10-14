@@ -1,11 +1,16 @@
 """Synthetic inputs for the testdelta tests, built at test time.
 
-Nothing here runs a test suite: unittest -v logs and JUnit XML reports are
-assembled as text in the layout the real tools print (checked against
-Python 3.11 and 3.12 output). Hostile shapes (DOCTYPE/ENTITY bombs, unsafe
-test names) are built here too, so no file under tests/ holds them whole.
+unittest -v logs and JUnit XML reports are assembled as text in the layout
+the real tools print (checked against Python 3.11 and 3.12 output). The one
+exception is real_unittest_log(), which runs a small synthetic suite with
+this interpreter's unittest to guard against format drift (testdelta itself
+never runs tests). Hostile shapes (DOCTYPE/ENTITY bombs, unsafe test names)
+are built here too, so no file under tests/ holds them whole.
 """
 import pathlib
+import re
+import subprocess
+import sys
 from xml.sax.saxutils import escape, quoteattr
 
 SEP_EQ = "=" * 70
@@ -173,3 +178,62 @@ def external_entity(target="file:///etc/passwd"):
     return ("<?xml version=\"1.0\"?>\n<!DOCTYPE t [\n  <!ENTITY xxe SYSTEM \""
             + target + "\">\n]>\n"
             + '<testsuite><testcase classname="x" name="&xxe;"/></testsuite>\n')
+
+
+# --- real unittest output with awkward names ----------------------------------
+
+# Test names real unittest prints as they are: " ... ", "(", ")" and " ... ok"
+# inside the name, a docstring that looks like a result line, a subtest and a
+# skip reason holding " ... ".
+ODD_WHERE = "test_dyn.C"
+ODD_NAMES = ("test ... odd", "test (x) ... ok", "test_doc ... z", "test_sub ... s",
+             "test_skip ... k", "test_ok")
+
+_ODD_SUITE = """\
+import unittest
+FAIL = {fail}
+class C(unittest.TestCase):
+    pass
+def _plain(self):
+    if FAIL:
+        self.fail("boom")
+def _doc(self):
+    \"\"\"Doc ... ok (fake.C.y) ... ok\"\"\"
+    if FAIL:
+        self.fail("doc")
+def _sub(self):
+    for i in range(2):
+        with self.subTest(i=i):
+            if FAIL:
+                self.assertEqual(i, 0)
+@unittest.skip("why ... ok")
+def _skip(self):
+    pass
+def _ok(self):
+    pass
+setattr(C, "test ... odd", _plain)
+setattr(C, "test (x) ... ok", _plain)
+setattr(C, "test_doc ... z", _doc)
+setattr(C, "test_sub ... s", _sub)
+setattr(C, "test_skip ... k", _skip)
+setattr(C, "test_ok", _ok)
+"""
+
+
+def real_unittest_log(directory, fail, form="long"):
+    """The -v log (stderr) of this interpreter's unittest on the odd-name
+    suite; form="short" rewrites ids to the pre-3.11 'name (module.Class)'."""
+    work = pathlib.Path(directory) / ("suite_fail" if fail else "suite_pass")
+    work.mkdir()
+    write(work, "test_dyn.py", _ODD_SUITE.format(fail=bool(fail)))
+    argv = [sys.executable, "-I", "-m", "unittest", "discover", "-v",
+            "-s", str(work), "-t", str(work)]
+    if sys.version_info >= (3, 12):
+        argv += ["--durations", "0"]
+    proc = subprocess.run(argv, capture_output=True, text=True, timeout=60, cwd=work)
+    log = proc.stderr
+    if form == "short":
+        for name in ODD_NAMES:
+            log = log.replace(f"({ODD_WHERE}.{name})", f"({ODD_WHERE})")
+        assert not re.search(re.escape(ODD_WHERE) + r"\.test", log)
+    return log

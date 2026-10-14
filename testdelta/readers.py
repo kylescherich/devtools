@@ -238,6 +238,7 @@ _DURATION = re.compile(r"(\d+(?:\.\d+)?)s\s+(.*)")
 _RAN = re.compile(r"Ran \d+ tests? in ")
 _MODULE_FIXTURES = {"setUpModule", "tearDownModule"}
 _CAPTURED = {"Stdout:", "Stderr:"}
+_SEP = " ... "
 
 
 def _line_status(value):
@@ -259,13 +260,16 @@ def parse_head(head):
 
 def _parse_head(head):
     """(test id, has subtest parameters) or None. Verbose subtest lines are
-    indented, so leading spaces are dropped."""
+    indented, so leading spaces are dropped. Names may hold " (", ")" and
+    " ... ", so the split points are tried from the right: the id is the
+    last parenthesised group that names the test consistently."""
     head = head.lstrip(" ")
-    start = 0
+    end = len(head)
     while True:
-        i = head.find(" (", start)
+        i = head.rfind(" (", 0, end)
         if i <= 0:
             return None
+        end = i + 1
         name, rest = head[:i], head[i + 2:]
         marker = "." + name + ")"
         k = rest.find(marker)
@@ -275,7 +279,46 @@ def _parse_head(head):
         if short and _TAIL.fullmatch(short.group(2)) and (
                 "." in short.group(1) or name in _MODULE_FIXTURES):
             return short.group(1) + "." + name, bool(short.group(2))
-        start = i + 1
+
+
+def _seps(line):
+    """Start indexes of every " ... " in line, right to left."""
+    out = []
+    k = line.rfind(_SEP)
+    while k >= 0:
+        out.append(k)
+        k = line.rfind(_SEP, 0, k + len(_SEP) - 1)
+    return out
+
+
+def _right_status(line):
+    """The status at the right end of line, after some " ... ", or None."""
+    for k in _seps(line):
+        status = _line_status(line[k + len(_SEP):])
+        if status:
+            return status
+    return None
+
+
+def _result_line(line):
+    """(test id, subtest, status or None, glued) for a verbose result line,
+    or None. The status is found from the RIGHT end, then the id from the
+    head before it. When no such pair exists, the head is the first prefix
+    that parses and a status after output printed by the test is 'glued'
+    (tentative)."""
+    seps = _seps(line)
+    for k in seps:
+        status = _line_status(line[k + len(_SEP):])
+        if status:
+            parsed = _parse_head(line[:k])
+            if parsed is not None:
+                return parsed + (status, False)
+    for k in reversed(seps):
+        parsed = _parse_head(line[:k])
+        if parsed is not None:
+            status = _right_status(line[k:])
+            return parsed + (status, status is not None)
+    return None
 
 
 def _block_message(lines):
@@ -329,7 +372,9 @@ def parse_unittest(text):
     subtest_status = {}         # id -> [status, ...] from indented subtest lines
     blocks = {}                 # id -> [(status, message, traceback), ...]
     durations = {}
-    pending = None
+    pending = None              # started, status still to come
+    doc = None                  # head printed, docstring line next
+    glued = None                # (id, target) whose status followed output
     started = []
     recognised = False
     i = 0
@@ -345,42 +390,69 @@ def parse_unittest(text):
                     if block.group(1) == "UNEXPECTED SUCCESS":
                         body = ()       # no traceback; its dash line ends the run
                     else:
+                        if (i + 1 < len(lines) and not _SEP_DASH.fullmatch(lines[i])
+                                and _SEP_DASH.fullmatch(lines[i + 1])):
+                            i += 1      # the docstring description line
                         if i < len(lines) and _SEP_DASH.fullmatch(lines[i]):
                             i += 1
                         body, i = _read_block(lines, i)
                     blocks.setdefault(test_id, []).append(
                         (_BLOCK_STATUS[block.group(1)], _block_message(body), body))
                     recognised = True
-            pending = None
+            pending = doc = glued = None
             continue
         if line == "Slowest test durations":
             i = _read_durations(lines, i, durations)
-            pending = None
+            pending = doc = glued = None
             continue
         if _RAN.match(line):
             recognised = True
-            pending = None
+            pending = doc = glued = None
             continue
-        head, sep, after = line.partition(" ... ")
-        parsed = _parse_head(head) if sep else _parse_head(line)
-        if parsed is not None:
-            test_id, subtest = parsed
-            started.append(test_id)
-            status = _line_status(after.rpartition(" ... ")[2]) if sep else None
+        if doc is not None and _SEP in line:
+            # Docstring form: this line is the description, whatever it
+            # says; its right-end status belongs to the test above.
+            test_id, doc = doc, None
+            status = _right_status(line)
             if status:
-                target = subtest_status if subtest else line_status
-                target.setdefault(test_id, []).append(status)
+                line_status.setdefault(test_id, []).append(status)
                 recognised = True
-                pending = None
+                pending, glued = None, (test_id, line_status)
             else:
                 pending = test_id
             continue
+        doc = None
+        result = _result_line(line)
+        if result is not None:
+            test_id, subtest, status, is_glued = result
+            started.append(test_id)
+            target = subtest_status if subtest else line_status
+            if status:
+                target.setdefault(test_id, []).append(status)
+                recognised = True
+                pending = None
+                glued = (test_id, target) if is_glued else None
+            else:
+                pending, glued = test_id, None
+            continue
+        parsed = _parse_head(line)
+        if parsed is not None:          # a bare head: the docstring form
+            started.append(parsed[0])
+            doc, pending, glued = parsed[0], None, None
+            continue
         if pending is not None:
-            status = _line_status(line.rpartition(" ... ")[2] if sep else line)
+            status = _line_status(line.rpartition(_SEP)[2])
             if status:
                 line_status.setdefault(pending, []).append(status)
                 recognised = True
                 pending = None
+        elif glued is not None and _SEP not in line:
+            # A bare status after a status glued to printed output is the
+            # real one; the worst of the two is kept.
+            status = _line_status(line)
+            if status:
+                glued[1].setdefault(glued[0], []).append(status)
+                glued = None
     if not recognised:
         raise InputError("not JUnit XML or unittest -v output (no test results "
                          "found)")
