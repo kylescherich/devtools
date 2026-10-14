@@ -337,6 +337,7 @@ _FIXTURES = frozenset({"setUpClass", "tearDownClass", "setUpModule", "tearDownMo
 _MODULE_FIXTURES = {"setUpModule", "tearDownModule"}
 _CAPTURED = {"Stdout:", "Stderr:"}
 _SEP = " ... "
+_LEAD_STATUS = (("FAIL", "fail"), ("ERROR", "error"), ("unexpected success", "xpass"))
 
 
 def _line_status(value):
@@ -415,6 +416,13 @@ def _result_line(line):
         parsed = _parse_head(line[:k])
         if parsed is not None:
             status = _right_status(line[k:])
+            if status is not None:
+                # Output glued after a real status ("FAILcaptured ... ok"):
+                # a failing status at its start counts too, worst wins.
+                rest = line[k + len(_SEP):]
+                lead = next((s for word, s in _LEAD_STATUS if rest.startswith(word)), None)
+                if lead is not None and RANK[lead] > RANK[status]:
+                    status = lead
             return parsed + (status, status is not None)
     return None
 

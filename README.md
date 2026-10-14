@@ -383,6 +383,10 @@ must be the same format.
   `UNEXPECTED SUCCESS:` blocks. The id is `pkg.mod.Class.test_x`. unittest
   text has no times, except for the tests listed by Python 3.12's
   `--durations N`; every other time is n/a. A time is never invented.
+  Accepted false regression (safe side): when a result line has output
+  glued between the test name and a final ` ... ok`, a `FAIL` or `ERROR` at
+  the start of that output counts as the test's status, so a passing test
+  that prints `FAIL ... ` on its own result line is reported as failing.
 - Statuses: pass, fail, error, skip, xfail (expected failure), xpass
   (unexpected success). A test id that appears twice in one file is warned
   about and keeps its worst status (error > fail > xpass > skip > xfail >
