@@ -60,3 +60,14 @@ Run from the repo root:
 - User input: `--rev` must not start with `-` (usage error, exit 2) and is passed after `--end-of-options`; `--path` always after `--`.
 - Everything printed passes through `gitarch/_redact.py`, a byte-for-byte copy of `loglens/redact.py` (no import between packages; `test_redact_copy_identical` checks it).
 - Standard library only; Python 3.11 and 3.12; pure ASCII source and commit messages; both suites OK before every commit. Test repos are synthetic, built at test time in temp dirs by `tests/gitarch_fixtures.py`.
+
+## Test Delta rules (testdelta, BRIEF-DEVWS-024)
+- testdelta compares two test results (unittest -v text or JUnit XML); it NEVER runs tests. It opens only the two inputs and --output; no network, no subprocess, never follows symlinks.
+- XML: refuse any input containing `<!DOCTYPE` or `<!ENTITY` (exit 4) before parsing; inputs must be UTF-8; 50 MB cap per file (`--max-bytes`), checked before reading; parse only with stdlib `xml.etree.ElementTree`, only after those checks.
+- Never invent a time: unittest text has times only for tests in a 3.12 `--durations` list; every other time is n/a and n/a is never treated as 0.
+- Default output = test ids, statuses and times only. Failure messages and tracebacks only with `--details`, for regressions only (first message line + at most 20 traceback lines). system-out/system-err are never shown in M1.
+- Everything printed passes through `testdelta/_redact.py`, a byte-for-byte copy of `loglens/redact.py` (no import between packages; `test_redact_copy_identical` checks it). Test names are untrusted: escape them for terminal (control/bidi visible), md and HTML (single file, strict CSP, no scripts).
+- `--output` refused if it exists unless `--force`, and never through a symlink. Reports (text/md/html/json) are byte-for-byte reproducible.
+- Exit codes: 0 no regressions, 1 regressions, 2 usage, 4 unreadable/unsupported/refused input.
+- Tests that check privacy or leaks assert non-empty output first (DEC-071); sentinels come from `tests/secret_shapes.py` (DEC-195), built at runtime in temp dirs.
+- Standard library only; Python 3.11 to 3.13; pure ASCII source, tests and commit messages (write test files via a Python script, non-ASCII as escapes); both suites OK before every commit.

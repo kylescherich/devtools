@@ -2,7 +2,7 @@ import ast
 import unittest
 from pathlib import Path
 
-PACKAGES = ("repo_xray", "askdata", "jsondiff", "loglens", "gitarch")
+PACKAGES = ("repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta")
 
 
 def _imported_modules(py_file):
@@ -20,7 +20,7 @@ def _imported_modules(py_file):
 
 class TestAskdataIsolation(unittest.TestCase):
     def test_no_cross_imports(self):
-        """Verify repo_xray, askdata, jsondiff, loglens and gitarch never import each other."""
+        """Verify repo_xray, askdata, jsondiff, loglens, gitarch and testdelta never import each other."""
         repo_root = Path(__file__).parent.parent
 
         for package in PACKAGES:
