@@ -287,3 +287,39 @@ class TestPreservation(RedactTable):
             ("svc-deploy@proj.iam.example.test denied", "<email> denied"),
             ("mailto:ops@example.test", "mailto:<email>"),
         ])
+
+
+# BRIEF-DEVWS-025: "_" is a word character, so a token glued to a name with
+# "_" has no \b before it. Every provider shape, after every separator.
+def glued_shapes():
+    return {
+        "AKIA": ss.AKIA + "SNTGLUEDKEYIDABC",
+        "ASIA": ss.ASIA + "SNTGLUEDKEYIDABC",
+        "XOXB": ss.XOXB + "SNTgluedSlack",
+        "GLPAT": ss.GLPAT + "SNTgluedGitLabTokenAb",
+        "AIZA": ss.AIZA + "S" * 35,
+        "SK_LIVE": ss.SK_LIVE + "SNTgluedStripe",
+        "RK_TEST": ss.RK_TEST + "SNTgluedStripe",
+        "GHP": ss.GHP + "SNTgluedGitHub",
+        "GITHUB_PAT": ss.GITHUB_PAT + "SNTgluedGitHub",
+        "SK_DASH": ss.SK_DASH + "SNTgluedApiKey",
+        "JWT": ss.JWT + "SNTa." + ss.JWT + "SNTb.SNTc",
+    }
+
+
+class TestGluedTokens(RedactTable):
+    PREFIXES = ("_", "key_", "", "=", "x:", "a/", " ", "[", '"')
+
+    def test_redacted_after_any_separator(self):
+        shapes = glued_shapes()
+        self.assertEqual(len(shapes), 11)
+        for name, token in shapes.items():
+            with self.subTest(shape=name):
+                self.check_rows([(prefix + token + " end", prefix + R + " end")
+                                 for prefix in self.PREFIXES])
+
+    def test_no_over_redaction(self):
+        words = ["task-force", "risk-free", "keyJar", "high_score",
+                 "a task-based risk-aware keyJ high_ value"]
+        self.check_rows([(w, w) for w in words]
+                        + [("k" + token, "k" + token) for token in glued_shapes().values()])

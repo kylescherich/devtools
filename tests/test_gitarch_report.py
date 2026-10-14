@@ -89,6 +89,18 @@ class TestPrivacyDefaults(ReportTestCase):
                     self.assertIn("SUBJlong " + "x" * (SUBJECT_CHARS - 9), out)
                     self.assertNotIn("Zorblax", out)
 
+    def test_messages_token_glued_after_underscore_redacted(self):
+        # BRIEF-DEVWS-025: a subject with name_<token>, default format.
+        token = ss.GHP + "SNTgluedGitarchToken"
+        repo = fx.init_repo(self.dir)
+        fx.write(repo, "app.py", "v = 1\n")
+        fx.commit(repo, "rotate name_" + token, "2026-01-05T10:00:00Z")
+        self.assertIn(token, fx.git(repo, "log", "--format=%s").decode())
+        out = self.report(repo, "--messages")
+        self.assertTrue(out)
+        self.assertIn("rotate name_<redacted>", out)
+        self.assertNotIn("SNTgluedGitarchToken", out)
+
     def test_authors_names_only_no_email(self):
         repo = self.marked_repo()
         for fmt in FORMATS:

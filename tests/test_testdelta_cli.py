@@ -323,6 +323,16 @@ class TestPrivacyThroughCli(_Files):
                 self.assertNotIn("CLIOUT", out)
                 self.assertNotIn(GH, out)
 
+    def test_token_glued_after_underscore_redacted(self):
+        # BRIEF-DEVWS-025: a test name with name_<token>, default output.
+        name = "test_name_" + ss.GHP + "SNTgluedTestdeltaToken"
+        b = fx.write(self.dir, "b.xml", fx.junit_xml([fx.junit_case(name)]))
+        a = fx.write(self.dir, "a.xml", fx.junit_xml([fx.junit_case(name, kind="fail")]))
+        out, _ = self.assert_code([b, a], EXIT_REGRESSIONS)
+        self.assertTrue(out)
+        self.assertIn("test_name_<redacted>", out)
+        self.assertNotIn("SNTgluedTestdeltaToken", out)
+
 
 # python -I -m testdelta, with the repository on sys.path (-I drops the
 # current directory, and the package need not be installed).
