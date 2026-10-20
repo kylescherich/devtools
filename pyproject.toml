@@ -19,3 +19,6 @@ loglens = "loglens.cli:main"
 gitarch = "gitarch.cli:main"
 testdelta = "testdelta.cli:main"
 envcontract = "envcontract.cli:main"
+
+[tool.repo-xray]
+independent = ["repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta", "envcontract"]

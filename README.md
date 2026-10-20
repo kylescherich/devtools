@@ -26,9 +26,58 @@ repo-xray <path> [--output FILE] [--format html|md] [--max-files N] [--no-docstr
 - `2` — Usage error or output path is inside the target
 - `3` — Target is unreadable or has too many files
 
+## Import checks (`--cycles`, `--boundaries`)
+
+```bash
+repo-xray <path> --cycles [--boundaries [--independent PKG,PKG]] [--format text|md|json] [--max-files N]
+```
+
+With `--cycles` and/or `--boundaries`, repo-xray writes no report file. It
+prints the checks to stdout (`--format text`, the default, `md` or `json`;
+`html` and `--output` are usage errors) and exits as below.
+
+- `--cycles` lists each import cycle once, as the shortest loop through a
+  module, starting at its smallest module name, with `file:line` of each edge.
+- `--boundaries` checks independent packages: any import from a module of one
+  listed package into a module of another listed package is a violation,
+  shown with `file:line`. A package may import itself; packages not on the
+  list may import listed ones and be imported by them. The list comes from
+  `--independent pkg_a,pkg_b`, or else from the root pyproject.toml:
+
+  ```toml
+  [tool.repo-xray]
+  independent = ["pkg_a", "pkg_b"]
+  ```
+
+  `--independent` without `--boundaries` is a usage error. A missing,
+  malformed or invalid `[tool.repo-xray]` table is exit 2; the message names
+  the file only and never quotes its content. Listed packages with no module
+  in the repo are shown as "Not found" and do not change the exit code.
+
+What counts as an import edge:
+- Absolute and relative imports (level resolved) that land on a module of
+  the repo. `from pkg import name` is an edge to `pkg.name` if that module
+  exists, else to `pkg`; `import a.b.c` is an edge to the longest module
+  prefix that exists.
+- Imports inside functions and inside `try` blocks count, because they run.
+- Imports under `if TYPE_CHECKING:` / `if typing.TYPE_CHECKING:` are listed
+  separately and never count for cycles or rules (their `else:` branch counts).
+- Standard-library names (`sys.stdlib_module_names`) are never internal, even
+  if a repo module shadows one (for example a top-level `string.py`).
+  Third-party imports are ignored. A module importing itself is not a cycle.
+- The same files are scanned as for the report (same skipped directories,
+  symlinks, size limit and `--max-files`).
+
+**Exit codes with `--cycles` / `--boundaries`** (when several apply, the
+leftmost wins: 2 > 4 > 1 > 0):
+- `0` — no cycle and no violation
+- `1` — at least one cycle (with `--cycles`) or violation (with `--boundaries`)
+- `2` — usage error, or a missing, malformed or invalid `[tool.repo-xray]`
+- `4` — target unreadable or has too many files
+
 ## What it reads
 
-It reads .py files and the [project.scripts] table of the root pyproject.toml, nothing else.
+It reads .py files and the [project.scripts] table of the root pyproject.toml, nothing else. With `--boundaries` and no `--independent`, it also reads the [tool.repo-xray] table of that file.
 
 repo-xray never runs or imports code from the target repository.
 
