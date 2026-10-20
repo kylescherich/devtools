@@ -563,3 +563,113 @@ When several apply, the leftmost wins: 2 > 4 > 1 > 0.
 | 1 | regressions: newly failing or erroring tests, added tests that fail, error or unexpectedly pass, removed tests, newly skipped tests; slower tests only with `--fail-on-slow` |
 | 2 | usage error: unknown option, a bad number, `--force` without `--output`, or a refused `--output` |
 | 4 | input missing, unreadable, a symlink or directory, empty, over `--max-bytes`, not UTF-8, not a recognised format, the two inputs in different formats, malformed XML, XML with a DOCTYPE or ENTITY declaration (refused unparsed), or a report that says the run failed but names no failing test |
+
+# envcontract
+
+Env Contract: does the environment this program reads match what it
+documents? `envcontract` lists environment variable names read in Python
+code but missing from the example files ("undocumented"), names in the
+example files that the code never reads ("unused"), reads it could not
+check ("dynamic") and files it could not read ("unreadable"), plus counts.
+It prints names, paths, line numbers and counts, never a value.
+Standard library only; Python 3.11 to 3.13.
+
+## Usage
+
+```bash
+envcontract REPO_DIR [--example FILE] [--format text|md|json]
+```
+
+Examples (synthetic paths):
+
+```bash
+envcontract ~/src/myapp                          # text report on stdout
+envcontract ~/src/myapp --format json
+envcontract ~/src/myapp --example deploy/app.env.template
+```
+
+`--example FILE` replaces discovery: only that file is the documentation.
+A relative FILE is taken from REPO_DIR, not the current directory, and it
+must resolve inside REPO_DIR.
+
+## What it reads
+
+- **Code**: every `*.py` file, parsed with `ast`. Code is never imported or
+  run. It finds literal names in `os.getenv("X")`, `os.getenv("X", d)`,
+  `os.environ["X"]`, `os.environ.get("X"[, d])`, `"X" in os.environ` and
+  `"X" not in os.environ`, also through `import os as o` and
+  `from os import getenv, environ` (with or without `as`). A name that is
+  not a string literal (a variable, an f-string, a concatenation) is listed
+  as dynamic with its file and line and is not checked.
+- **Not reads**: `os.environ["X"] = ...` (a write), `os.environ.setdefault`
+  and `os.environ.pop` are not reported.
+- **Documentation**: only files whose name ends in `.example`, `.template` or
+  `.sample` (`.env.example`, `config.env.template`). Lines `NAME=...`,
+  `export NAME=...` and commented `# NAME=...` document NAME. Only the name
+  and line number are kept; the value is never stored.
+- **Skipped**: `.git`, `.venv`, `venv`, `__pycache__`, `node_modules` and
+  any directory holding a `pyvenv.cfg`.
+- A `.py` file that does not parse is listed under unreadable with its path
+  and `parse error` only, never the error text (it quotes source). It does
+  not stop the run.
+
+## What the report shows
+
+Example files found, then a summary (`read`, `documented`, `undocumented`,
+`unused`, `dynamic`, `unreadable`), then the four sections. Each use is
+printed as `path line N`. Paths are relative to REPO_DIR; the repo is named by
+its directory name only. When no example file exists, the report says
+"no example file found" and every name read is undocumented.
+
+## JSON schema (`--format json`, schema `envcontract/1`)
+
+One object, keys in this order, lists sorted, ASCII only:
+
+```
+{
+  "schema": "envcontract/1",
+  "repo": "<directory name>",
+  "example_files": ["rel/path", ...],
+  "summary": {"read": 3, "documented": 3, "undocumented": 1, "unused": 1,
+              "dynamic": 1, "unreadable": 0},
+  "undocumented": [{"name": "X", "uses": [{"path": "a.py", "line": 3}]}],
+  "unused": [{"name": "Y", "where": [{"path": ".env.example", "line": 2}]}],
+  "dynamic": [{"path": "a.py", "line": 9}],
+  "unreadable": [{"path": "bad.py", "reason": "parse error"}]
+}
+```
+
+`reason` is one of `parse error`, `not UTF-8`, `refused symlink`,
+`outside repo`, `not a regular file`, `cannot read`.
+
+## Safety rules
+
+- envcontract opens only `*.py` and `*.example` / `*.template` / `*.sample`
+  files. It never opens `.env`, `secrets.env`, `*.key` or anything else,
+  even when named with `--example` (refused, exit 2, no content quoted).
+- Symlinks are resolved before anything is opened. A file whose resolved
+  name lacks the allowed suffix, or which resolves outside REPO_DIR, is
+  refused and listed by path, never opened. Directory symlinks are never
+  followed.
+- No value is ever printed: not example values, not getenv defaults, in any
+  format. Everything printed also passes through the same redaction as Log
+  Lens (see "What is redacted" above); messages and reports put paths and
+  names where redaction leaves them intact, so `OPENAI_API_KEY` prints as is.
+- No network, no subprocess, writes nothing. Names and paths are untrusted:
+  control and bidi characters are shown escaped; Markdown special
+  characters are escaped.
+
+## Exit codes
+
+When several apply, the leftmost wins: 2 > 4 > 1 > 0.
+
+| code | meaning |
+| --- | --- |
+| 0 | consistent: every literal name read is documented and every documented name is read |
+| 1 | differences: undocumented or unused names; with no example file, any literal name read |
+| 2 | usage error, or a refused `--example` (wrong suffix, a symlink to another name, or outside REPO_DIR) |
+| 4 | REPO_DIR missing, not a directory or unreadable; `--example` missing, not a regular file or unreadable |
+
+Dynamic reads and unreadable files alone do not change the exit code;
+they are listed so you can check them by hand. With no example file and no
+literal reads the exit code is 0.
