@@ -56,6 +56,7 @@
 
 ## Status (BRIEF-DEVWS-015, branch devtools/repo-xray-mvp)
 - Tasks 1–5 done. `repo-xray <path> --output <file> [--format html|md] [--max-files N]`; exit 0 ok, 2 usage (incl. output inside target), 3 target unreadable/too large.
+- Import Boundary Guard (BRIEF-DEVWS-035 / DEC-407, branch devtools/xray-boundaries, not pushed): `--cycles` and `--boundaries [--independent a,b]` in repo_xray/boundaries.py print text|md|json to stdout, exit 0/1/2/4; config from [tool.repo-xray] independent; devtools adopts it for its seven tool packages in pyproject.toml; tests in tests/test_xray_boundaries.py and tests/test_xray_adoption.py.
 - Task 6 (review fixes, DEC-156) done: attribute-safe anchors, honest labels, Skipped / not parsed section, 1 MB size cap, Windows junctions treated as links, try-import bookkeeping, --no-docstrings, README.
 - Analyzer: stdlib `ast` only, three passes (module names from package structure, collisions, internal vs external); imports collected anywhere in a file; try/importlib/star/`__import__` imports listed as unresolved/dynamic, never guessed. Reads only `.py` and the console-scripts table of `pyproject.toml`; never executes target code; no symlinks, no dotfiles.
 - Reports: Markdown + single-file HTML with inline-SVG dependency graph; every source-derived string escaped; names, signatures and first docstring lines only.
