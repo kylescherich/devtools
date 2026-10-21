@@ -6,6 +6,24 @@ from pathlib import Path
 from askdata.csvinspect import inspect_csv
 from askdata.sqliteinspect import inspect_sqlite, InspectError
 from askdata.report import render_terminal, render_md, render_html
+from askdata.query import run as run_query
+
+QUERY_EPILOG = """\
+sources:
+  SQLite is attached read-only as schema NAME (query NAME.table); .csv/.tsv,
+  .jsonl/.jsonl.gz and .log/.txt become table NAME with _file and _file_date.
+
+functions:
+  x REGEXP p, regexp_extract(text, pattern, group), tz(ts[, zone]) with
+  zone default America/Chicago; naive and date-only values are returned as is.
+
+exit codes:
+  0 ok
+  1 refused by the guard (not aggregated, or over --max-rows)
+  2 usage, bad or refused SQL, --rows with a profiled source
+  3 input missing, unreadable, unsupported, mixed shapes in one glob,
+    WAL without -shm (use --frozen on a copy), or timed out
+"""
 
 
 def main(argv=None):
@@ -30,12 +48,36 @@ def main(argv=None):
     inspect_parser.add_argument("--samples", action="store_true",
                                 help="Include up to 5 example values and top values per column; off by default for privacy")
     
+    query_parser = subparsers.add_parser(
+        "query", help="Run SQL over CSV, JSONL, log and SQLite sources",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="Run one SELECT over local sources. Without --rows the result must be "
+                    "aggregated; columns denied by a source profile can never be read.",
+        epilog=QUERY_EPILOG)
+    query_parser.add_argument("sources", nargs="+", metavar="SOURCE",
+                              help="PATH or NAME=PATH; PATH may be a quoted glob (needs NAME)")
+    query_parser.add_argument("--sql", required=True, help="one SELECT statement")
+    query_parser.add_argument("--format", choices=["table", "md", "csv"], default="table",
+                              help="output format (default: table)")
+    query_parser.add_argument("--frozen", action="store_true",
+                              help="open SQLite sources with immutable=1; only for static copies")
+    query_parser.add_argument("--rows", action="store_true",
+                              help="allow non-aggregated rows; refused when any source has a "
+                                   "profile with a deny-list")
+    query_parser.add_argument("--max-rows", type=int, default=500,
+                              help="refuse results with more rows (default: 500)")
+    query_parser.add_argument("--timeout", type=float, default=60,
+                              help="stop loading or querying after S seconds (default: 60)")
+
     try:
         args = parser.parse_args(argv)
     except SystemExit as e:
         # argparse errors exit with code 2
         return e.code if e.code is not None else 2
-    
+
+    if args.command == "query":
+        return run_query(args, sys.stdout, sys.stderr)
+
     # Input validation
     input_path = Path(args.path)
     
