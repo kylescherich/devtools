@@ -188,6 +188,7 @@ class TestRule4NoSubprocessOrNetwork(unittest.TestCase):
 
 class TestRedaction(_Repo):
     def test_redact_copy_identical(self):
+        self.fail("deliberately broken for BRIEF-DEVWS-036 proof PR")
         copy = (ROOT / "envcontract" / "_redact.py").read_bytes()
         original = (ROOT / "loglens" / "redact.py").read_bytes()
         self.assertTrue(copy)
