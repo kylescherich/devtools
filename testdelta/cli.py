@@ -41,6 +41,10 @@ By default the report holds test ids, statuses and times only: no failure
 messages, tracebacks or captured output. --details adds, for regressions
 only, the first line of the failure message and up to 20 traceback lines,
 redacted. Captured stdout/stderr is never shown.
+
+JUnit tests whose [...] parameter part changed (same base id, as many
+before as after, one status throughout) are renamed parametrized tests,
+not removed/added, and count as unchanged; --strict-ids turns this off.
 """
 
 
@@ -103,6 +107,9 @@ def _build_parser():
     parser.add_argument("--max-bytes", type=_positive_int, default=DEFAULT_MAX_BYTES,
                         metavar="N",
                         help=f"per-file size limit (default: {DEFAULT_MAX_BYTES})")
+    parser.add_argument("--strict-ids", action="store_true",
+                        help="match tests by full id only: no renamed parametrized "
+                             "tests, removed/added as before")
     return parser
 
 
@@ -171,7 +178,7 @@ def main(argv=None):
                                   args.max_bytes)
     except InputError as exc:
         return _fail(str(exc), EXIT_INPUT)
-    delta = compare(before, after, args.slow_ratio, args.slow_min)
+    delta = compare(before, after, args.slow_ratio, args.slow_min, args.strict_ids)
     names = (os.path.basename(args.before), os.path.basename(args.after))
     document = render(delta, args.format, args.details, names, args.fail_on_slow)
     if args.output:

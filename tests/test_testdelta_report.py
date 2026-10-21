@@ -152,7 +152,7 @@ class TestJSONSchema(unittest.TestCase):
         self.assertEqual(list(doc), ["schema", "inputs", "input_format", "slow_rule",
                                      "details", "fail_on_slow", "counts", "summary",
                                      "warnings"] + list(CATEGORIES)
-                         + ["duplicates", "unresolved"])
+                         + ["duplicates", "unresolved", "renamed_params"])
         self.assertEqual(doc["schema"], "testdelta/1")
         self.assertEqual(doc["summary"], {"regressions": 4, "improvements": 3})
         self.assertEqual(doc["slow_rule"], {"ratio": 2.0, "min_seconds": 0.5})

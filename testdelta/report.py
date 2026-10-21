@@ -20,6 +20,11 @@ failing and added failing tests only. Skip reasons and captured output are never
 never shown. The HTML report has a strict CSP, no scripts, links, images or
 event handlers, and values only ever land in text nodes. The current date or
 time never appears.
+
+Renamed parametrized tests (BRIEF-DEVWS-039) get one warning per base id and
+a section after the categories, both only when there are any; JSON always
+has the renamed_params list. With strict_ids none of this appears and the
+output is that of 8789cfe.
 """
 import html
 import json
@@ -46,6 +51,7 @@ TITLES = {
     "still_failing": "Still failing (not new)",
     "other_changes": "Other status changes (not counted)",
 }
+RENAMED_TITLE = "Renamed parametrized tests"
 
 _UNSAFE = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028\u2029"
                      r"\u202a-\u202e\u2066-\u2069]")
@@ -132,6 +138,16 @@ def _totals(delta):
     return rows + [("total", delta.total_before, delta.total_after)]
 
 
+def _rename_warnings(delta, e):
+    """One warning per renamed base id, the base id escaped by e."""
+    return [f"{_plural(r.count, 'parametrized test')} renamed (ids not stable: "
+            f"{e(r.base_id)}) -- fix the ids" for r in delta.renamed]
+
+
+def _rename_more(rename):
+    return rename.count - len(rename.examples)
+
+
 def _id_notes(delta):
     """(label, id) pairs for duplicate and unresolved ids."""
     out = []
@@ -150,11 +166,12 @@ def _render_text(delta, names, details, fail_on_slow):
     out = ["testdelta report"]
     out += [f"{label} = {e(value)}" for label, value in _header(delta, names, details)]
     out += ["", f"RESULT {summary(delta, fail_on_slow)}", ""]
-    if delta.warnings:
+    if delta.warnings or delta.renamed:
         out.append("WARNINGS")
         for warning in delta.warnings:
             loud = "!!! " if is_loud(warning) else "! "
             out.append(f"  {loud}{warning}")
+        out += [f"  ! {warning}" for warning in _rename_warnings(delta, e)]
         out += [f"  - {label}  {e(value)}" for label, value in _id_notes(delta)]
     else:
         out.append("WARNINGS none")
@@ -174,6 +191,13 @@ def _render_text(delta, names, details, fail_on_slow):
                 if omitted:
                     out.append(f"      ... {omitted} earlier traceback lines omitted")
                 out += [f"      | {e(line)}" for line in lines]
+    if delta.renamed:
+        out += ["", f"{RENAMED_TITLE.upper()} ({sum(r.count for r in delta.renamed)})"]
+        for r in delta.renamed:
+            out.append(f"  {r.count} x {r.status}  {e(r.base_id)}")
+            out += [f"      {e(old)} -> {e(new)}" for old, new in r.examples]
+            if _rename_more(r):
+                out.append(f"      ... {_rename_more(r)} more")
     return "\n".join(out) + "\n"
 
 
@@ -184,12 +208,13 @@ def _render_md(delta, names, details, fail_on_slow):
     out = ["# testdelta report", ""]
     out += [f"- {label}: {e(value)}" for label, value in _header(delta, names, details)]
     out += ["", f"**Result**: {summary(delta, fail_on_slow)}", "", "## Warnings", ""]
-    if delta.warnings:
+    if delta.warnings or delta.renamed:
         for warning in delta.warnings:
             if is_loud(warning):
                 out.append(f"- **WARNING: {warning}**")
             else:
                 out.append(f"- {warning}")
+        out += [f"- {warning}" for warning in _rename_warnings(delta, e)]
         out += [f"- {label}: {e(value)}" for label, value in _id_notes(delta)]
     else:
         out.append("none")
@@ -209,6 +234,13 @@ def _render_md(delta, names, details, fail_on_slow):
                 if omitted:
                     out.append(f"    - ... {omitted} earlier traceback lines omitted")
                 out += [f"    - traceback: {e(line)}" for line in lines]
+    if delta.renamed:
+        out += ["", f"## {RENAMED_TITLE} ({sum(r.count for r in delta.renamed)})", ""]
+        for r in delta.renamed:
+            out.append(f"- {r.count} x `{r.status}` {e(r.base_id)}")
+            out += [f"    - {e(old)} -> {e(new)}" for old, new in r.examples]
+            if _rename_more(r):
+                out.append(f"    - ... {_rename_more(r)} more")
     return "\n".join(out) + "\n"
 
 
@@ -242,12 +274,13 @@ def _render_html(delta, names, details, fail_on_slow):
         out.append(f"<tr><th>{label}</th><td>{e(value)}</td></tr>")
     out += ["</table>", f"<p><strong>Result</strong>: {summary(delta, fail_on_slow)}</p>",
             "<h2>Warnings</h2>"]
-    if delta.warnings:
+    if delta.warnings or delta.renamed:
         out.append("<ul>")
         for warning in delta.warnings:
             loud = is_loud(warning)
             out.append(f'<li class="loud">WARNING: {warning}</li>' if loud
                        else f"<li>{warning}</li>")
+        out += [f"<li>{warning}</li>" for warning in _rename_warnings(delta, escape_html)]
         out += [f"<li>{label}: {e(value)}</li>" for label, value in _id_notes(delta)]
         out.append("</ul>")
     else:
@@ -275,6 +308,18 @@ def _render_html(delta, names, details, fail_on_slow):
                 out.append('<tr><td colspan="5">message: '
                            f"{e(message) if message else '(none)'}<pre>{note}"
                            + "".join(e(line) for line in lines) + "</pre></td></tr>")
+        out.append("</table>")
+    if delta.renamed:
+        out += [f"<h2>{RENAMED_TITLE} ({sum(r.count for r in delta.renamed)})</h2>",
+                "<table>", "<tr><th>count</th><th>status</th><th>base id</th>"
+                "<th>examples (before -&gt; after)</th></tr>"]
+        for r in delta.renamed:
+            more = f"... {_rename_more(r)} more\n" if _rename_more(r) else ""
+            out.append(f'<tr><td class="n">{r.count}</td><td>{r.status}</td>'
+                       f"<td>{e(r.base_id)}</td><td><pre>"
+                       + "".join(escape_html(old) + " -&gt; " + e(new)
+                                 for old, new in r.examples)
+                       + f"{more}</pre></td></tr>")
         out.append("</table>")
     out += ["</body>", "</html>"]
     return "\n".join(out) + "\n"
@@ -305,7 +350,7 @@ def _render_json(delta, names, details, fail_on_slow):
                    for status, b, a in _totals(delta)],
         "summary": {"regressions": delta.regressions(fail_on_slow),
                     "improvements": delta.improvements()},
-        "warnings": list(delta.warnings),
+        "warnings": list(delta.warnings) + _rename_warnings(delta, redact),
     }
     for name in CATEGORIES:
         with_detail = details and name in DETAILED
@@ -314,6 +359,12 @@ def _render_json(delta, names, details, fail_on_slow):
                          "after": [redact(i) for i in delta.duplicates_after]}
     doc["unresolved"] = {"before": [redact(i) for i in delta.unresolved_before],
                          "after": [redact(i) for i in delta.unresolved_after]}
+    if not delta.strict_ids:
+        doc["renamed_params"] = [
+            {"base_id": redact(r.base_id), "count": r.count, "status": r.status,
+             "examples": [{"before": redact(old), "after": redact(new)}
+                          for old, new in r.examples]}
+            for r in delta.renamed]
     return json.dumps(doc, indent=2, ensure_ascii=True) + "\n"
 
 

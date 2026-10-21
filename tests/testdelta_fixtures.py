@@ -267,3 +267,54 @@ def real_unittest_log(directory, fail, form="long"):
             log = log.replace(f"({ODD_WHERE}.{name})", f"({ODD_WHERE})")
         assert not re.search(re.escape(ODD_WHERE) + r"\.test", log)
     return log
+
+
+# --- renamed parametrized ids (BRIEF-DEVWS-039) ---------------------------------
+
+RENAME_CLASS = "tests.test_harness.TestLoad"
+RENAME_BASE = "test_malformed_file_is_null_with_warning"
+STAMP_BEFORE = "2026-10-21 05:54:54.841690"
+STAMP_AFTER = "2026-10-21 05:57:53.088515"
+
+
+def stamped(stamp, k):
+    """The BRIEF-HARNESS-037 shape: a timestamp embedded in the param part."""
+    return f"{RENAME_BASE}[{stamp} \u2026 case{k}]"
+
+
+def _cases(pairs, classname=RENAME_CLASS):
+    """(name, status) pairs as JUnit cases; status pass or fail."""
+    return [junit_case(name, classname) if status == "pass" else
+            junit_case(name, classname, kind="fail", message="synthetic message",
+                       text="Traceback line 1\nAssertionError: x")
+            for name, status in pairs]
+
+
+def rename_real(fail_after=None):
+    """6 stamped ids that change between runs plus 7 fixed ids under the same
+    base id; all pass, except stamped case fail_after on the after side."""
+    fixed = [(f"{RENAME_BASE}[fixed-{k}]", "pass") for k in range(1, 8)]
+    before = fixed + [(stamped(STAMP_BEFORE, k), "pass") for k in range(1, 7)]
+    after = fixed + [(stamped(STAMP_AFTER, k), "fail" if k == fail_after else "pass")
+                     for k in range(1, 7)]
+    return junit_xml(_cases(before)), junit_xml(_cases(after))
+
+
+def rename_uneven():
+    """3 before vs 2 after under one base id, plus one id that matches."""
+    before = [("test_ok", "pass")] + [(f"test_three[b{k}]", "pass") for k in range(3)]
+    after = [("test_ok", "pass")] + [(f"test_three[a{k}]", "pass") for k in range(2)]
+    return junit_xml(_cases(before)), junit_xml(_cases(after))
+
+
+def rename_two_bases():
+    """test_alpha renames 2 -> 2 (all pass); test_beta goes 2 -> 1."""
+    before = ([(f"test_alpha[old{k}]", "pass") for k in range(2)]
+              + [(f"test_beta[old{k}]", "pass") for k in range(2)])
+    after = ([(f"test_alpha[new{k}]", "pass") for k in range(2)]
+             + [("test_beta[new0]", "pass")])
+    return junit_xml(_cases(before)), junit_xml(_cases(after))
+
+
+RENAME_SCENARIOS = {"real": rename_real, "one_fails": lambda: rename_real(fail_after=3),
+                    "uneven": rename_uneven, "two_bases": rename_two_bases}
