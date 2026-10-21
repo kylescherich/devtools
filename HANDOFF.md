@@ -1,5 +1,12 @@
 # HANDOFF — devtools
 
+## Status: Test Delta renamed_params (BRIEF-DEVWS-039 / DEC-446, branch devtools/testdelta-renamed-params, not pushed)
+- JUnit ids unmatched by full id are grouped by base id (trailing [...] removed); equal counts and one status throughout -> renamed_params (not removed/added, not a regression), one warning per base id ("... -- fix the ids", ASCII dashes), a section in text/md/html when any, JSON key renamed_params (additive, testdelta/1). Unequal counts or any status difference: as before. unittest never grouped. --strict-ids: output of 8789cfe byte for byte (SHA-256 pinned in tests/test_testdelta_renamed.py).
+- Test-first: 18 new tests failed on 8789cfe, 1 cycle. Existing test edit: test_top_level_keys_in_order expects the new key. Mutation (no status-equality check) fails the two status-difference tests. Tests: 794 in total (was 776); 3.12 and 3.11 OK. CI pin stays 05e771e. Evidence in ~/brief-039/.
+
+### Next (renamed_params)
+- Kyle reviews and pushes; the CI pin move needs a Hub decision.
+
 ## Status: Ask My Data M2a (BRIEF-DEVWS-037 step 2 / DEC-427, DEC-430, DEC-431, branch devtools/askdata-m2a, not pushed)
 - `askdata query SOURCE... --sql` (askdata/query.py, sqlfuncs.py, profiles.py): CSV/TSV, JSONL(.gz) and logs loaded in memory with _file/_file_date; SQLite attached mode=ro. REGEXP, regexp_extract, tz() with a US Central fallback. Guard (a): authorizer denies reads of profile-denied columns (arora_v2, job_scan, gate_decisions; default deny for unlisted text) and of non-source tables; guard (b): aggregate-only default via cell shapes or EXPLAIN Agg opcodes, 500-row cap, --rows refused for profiled sources.
 - Test-first: commit 1 tests + stub (61 tests, 252 failures at their own assertions), commit 2 implementation (3 cycles). Tests: 776 in total (was 715); 3.12 and 3.11 OK. Mutations (title allowed / unlisted, no EXPLAIN check, DST start +1 week, no mode=ro, --rows with a profile) each fail tests. Evidence in ~/brief-037/m2a/.

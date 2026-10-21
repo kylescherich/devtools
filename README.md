@@ -419,7 +419,7 @@ Standard library only; Python 3.11 to 3.13.
 testdelta BEFORE AFTER [--input-format junit|unittest]
           [--format text|md|html|json] [--output PATH [--force]]
           [--details] [--slow-ratio R] [--slow-min SECONDS] [--fail-on-slow]
-          [--max-bytes N]
+          [--max-bytes N] [--strict-ids]
 ```
 
 Examples (synthetic file names):
@@ -506,6 +506,24 @@ before AND after - before >= `--slow-min` seconds (default 0.5). Faster is
 the same rule in reverse. An n/a time is never treated as 0, so a test
 without both times is never slower or faster.
 
+Renamed parametrized tests (JUnit only; BRIEF-DEVWS-039): pytest ids whose
+`[...]` parameter part changes between runs (a timestamp in the id, say)
+would otherwise show as removed + added. Tests are first matched by full
+id. The still unmatched ones are grouped by base id, the id with the
+trailing `[...]` of its last `::` part removed. When a base id has as many
+unmatched tests before as after, and every one of them has the same status
+on both sides (all pass before and all pass after, say), they are reported
+as renamed: count, status and up to 3 `old -> new` examples, in a
+"Renamed parametrized tests (N)" section after the others (shown only when
+there are any), plus the warning
+`N parametrized tests renamed (ids not stable: <base id>) -- fix the ids`.
+Renamed tests count as unchanged: no regression, no exit 1, no
+slower/faster. Unequal counts or any status difference leave the whole
+group removed/added as before, so a failing test is never hidden behind a
+rename. unittest ids are never grouped. `--strict-ids` matches by full id
+only and gives exactly the pre-039 output (no section, warning or JSON
+key).
+
 Warnings: the total test count dropping comes first and loud
 (`!!! total test count dropped from N to M`); then, per side, duplicate ids,
 tests that started without a status (a truncated log), a unittest log with
@@ -548,7 +566,9 @@ One object, keys in this order, lists sorted by id, ASCII only:
   "fixed": [...], "unskipped": [...], "added": [...], "faster": [...],
   "still_failing": [...], "other_changes": [...],
   "duplicates": {"before": [id, ...], "after": [id, ...]},
-  "unresolved": {"before": [id, ...], "after": [id, ...]}
+  "unresolved": {"before": [id, ...], "after": [id, ...]},
+  "renamed_params": [{"base_id": "pkg.mod::test_x", "count": 6, "status": "pass",
+                      "examples": [{"before": id, "after": id}, ... at most 3]}, ...]
 }
 
 ITEM = {"id": "pkg.mod::test_x", "before": "pass", "after": "fail",
@@ -563,6 +583,9 @@ ever has these keys. Ids, names and details are redacted (see below).
 `warnings` holds the same strings as the other formats (the report-level
 check only adds new strings; the schema stays `testdelta/1`).
 `summary.regressions` counts slower tests only with `--fail-on-slow`.
+`renamed_params` (BRIEF-DEVWS-039) is additive: one entry per renamed base
+id, sorted by base id, `[]` when there are none; its warnings are in
+`warnings` too. With `--strict-ids` the key is left out.
 
 ## Privacy defaults
 
