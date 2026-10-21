@@ -97,8 +97,6 @@ def make_arora(directory, name="arora.db", wal=False, extra_sql=()):
         conn.execute("PRAGMA journal_mode=WAL")
     for stmt in ARORA_SCHEMA:
         conn.execute(stmt)
-    for stmt in extra_sql:
-        conn.execute(stmt)
     urls = []
     for i in range(1, 17):
         site = SITES[i % 4]
@@ -143,6 +141,8 @@ def make_arora(directory, name="arora.db", wal=False, extra_sql=()):
     conn.execute("INSERT INTO sightings VALUES (1,1,'2026-06-01T00:00:00+00:00')")
     conn.execute("INSERT INTO transcripts VALUES (1,1,1,?,'vimeo',?)",
                  (f"VIMEO{SENTINEL}", f"TRANSCRIPT{SENTINEL} words"))
+    for stmt in extra_sql:
+        conn.execute(stmt)
     conn.commit()
     conn.close()
     return path, {"urls": urls, "records": records}

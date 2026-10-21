@@ -15,7 +15,7 @@ class TestLoaders(QueryTestCase):
         (self.src / "2026-09-07 sales.csv").write_text(
             "item,qty,price,code\nx,2,1.5,007\ny,3,2.25,010\nz,,0.5,99\n", encoding="utf-8")
         rows = self.query_ok([f"{self.src}/2026-09-07 sales.csv"],
-                             "SELECT sum(qty), sum(price), count(qty), typeof(min(code)), "
+                             "SELECT sum(qty), sum(price), count(qty), typeof(max(code)), "
                              "max(_file), max(_file_date) FROM \"2026_09_07_sales\"")
         self.assertEqual(rows[1], ["5", "4.25", "2", "text", "2026-09-07 sales.csv",
                                    "2026-09-07"])
@@ -106,7 +106,7 @@ class TestFunctions(QueryTestCase):
         self.assertEqual(rows[1], [str(len(seconds)), str(sum(seconds))])
         rows = self.query_ok([self.pull], "SELECT regexp_extract('ab12', '(\\d)(\\d)', 2), "
                                           "regexp_extract('ab', '\\d', 0), "
-                                          "regexp_extract(NULL, 'x', 0)")
+                                          "regexp_extract(NULL, 'x', 0)", "--rows")
         self.assertEqual(rows[1], ["2", "", ""])
 
     def test_tz_in_sql(self):

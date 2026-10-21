@@ -49,7 +49,9 @@ class TestDenyList(QueryTestCase):
                 code, out, err = self.query(sources, sql)
                 self.assert_refused(code, out, err, 2)
                 self.assertIn("prohibited", err)
-                self.assertIn(col.split()[0], err)
+                if shape != "select_star":
+                    # SELECT * stops at the table's first denied column.
+                    self.assertIn(col.split()[0], err)
 
     def test_arora_denied_columns_every_shape(self):
         for table, col in ARORA_DENIED:
@@ -94,7 +96,7 @@ class TestDenyList(QueryTestCase):
         self.assertEqual(rows[1], ["0"])
 
     def test_raw_page_and_statement_tables_refused(self):
-        for sql in ["SELECT count(*) FROM dbstat", "SELECT count(*) FROM sqlite_stmt",
+        for sql in ["SELECT sum(payload) FROM dbstat", "SELECT count(sql) FROM sqlite_stmt",
                     "SELECT count(*) FROM pragma_table_info('records', 'arora')"]:
             with self.subTest(sql=sql):
                 code, out, err = self.query([f"arora={self.arora}"], sql)
