@@ -37,7 +37,8 @@ Run from the repo root:
 - Never enable SQLite extensions, and never allow `load_extension`, `readfile`, `writefile`, `edit` or `fts3_tokenizer`.
 - Never make `--samples` the default; reports stay schema-and-statistics-only unless the user asks.
 - Tests that check privacy or leaks assert non-empty output first (DEC-071).
-- Milestone 2 (natural-language questions via a model) is not authorized.
+- Never weaken the `askdata query` guard: the deny-list read check in the authorizer, default deny for unlisted text columns of a profiled source, and the aggregate-only default; `--rows` stays refused for profiled sources (DEC-427).
+- Milestone 2b (natural-language questions via a model) is not authorized.
 
 ## jsondiff rules
 - Never print values by default; example values appear only with `--values`.

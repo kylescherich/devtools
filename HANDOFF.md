@@ -1,5 +1,13 @@
 # HANDOFF — devtools
 
+## Status: Ask My Data M2a (BRIEF-DEVWS-037 step 2 / DEC-427, DEC-430, DEC-431, branch devtools/askdata-m2a, not pushed)
+- `askdata query SOURCE... --sql` (askdata/query.py, sqlfuncs.py, profiles.py): CSV/TSV, JSONL(.gz) and logs loaded in memory with _file/_file_date; SQLite attached mode=ro. REGEXP, regexp_extract, tz() with a US Central fallback. Guard (a): authorizer denies reads of profile-denied columns (arora_v2, job_scan, gate_decisions; default deny for unlisted text) and of non-source tables; guard (b): aggregate-only default via cell shapes or EXPLAIN Agg opcodes, 500-row cap, --rows refused for profiled sources.
+- Test-first: commit 1 tests + stub (61 tests, 252 failures at their own assertions), commit 2 implementation (3 cycles). Tests: 776 in total (was 715); 3.12 and 3.11 OK. Mutations (title allowed / unlisted, no EXPLAIN check, DST start +1 week, no mode=ro, --rows with a profile) each fail tests. Evidence in ~/brief-037/m2a/.
+- Known limit (README): guard (b) passes any statement with an aggregate or window function; (a) is the guarantee for profiled data.
+
+### Next (askdata M2a)
+- Kyle reviews and pushes; PRJ-DEVWS writes the Completion Report. M2b (model questions) is not authorized.
+
 ## Status: Log Lens redact speed (BRIEF-DEVWS-027 / DEC-240, branch devtools/redact-speed)
 - One commit per step: (1) scripts/redact_bench.py, a timing harness (seeded 20 MB ordinary-line log in a temp dir, redact() alone and loglens end to end, 3 runs, median; no timing assertion in CI). (2) Pre-checks in loglens/redact.py: each rule has a gate that is a necessary condition of its regex, checked on the current text (PEM "-----BEGIN ", [:=] for header/key rules, "@" and "://", provider prefixes, >= 13 \d for cards, plus a < 13 digit fast path in _cards). Hub-visible addition beyond the brief's list: (?i) word gates for the multi-word, spoken-form and key=value rules ("key" covers api_key/private_key/access_key/account_key), compiled with the rules' own case folding, never str.lower(); tests/test_redact_gates.py enumerates every keyword alternative from the rules' own patterns and checks each case variant (incl. long s, Kelvin sign) passes its gate. No pattern, rule or order changed; gitarch/_redact.py and testdelta/_redact.py refreshed. (3) Differential test tests/test_redact_differential.py against the frozen tests/redact_reference.py (5f30924, SHA-256 pinned): 54,454 inputs, byte-identical; every rule fires and every gate skips >= 10 times.
 - Mutations (git-archive copies in scratch dirs): provider gates reduced to "ghp_" -> 117 failures incl. 5 differential tests; card threshold 20 -> 15 failures incl. test_cards, test_random_lines, test_existing_test_inputs.
