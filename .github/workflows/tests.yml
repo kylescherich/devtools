@@ -1,6 +1,9 @@
 # Advisory test run for every PR and every push to main (Hub DEC-219).
 # Read-only, no secrets, GitHub-hosted runners only. Merges still follow
 # Hub acceptance (DEC-062) and a DEC naming the head commit.
+# testdelta job (BRIEF-DEVWS-036, DEC-424): on pull requests, run the suite on the
+# PR's base and head, compare with testdelta (pinned devtools commit), write the
+# Markdown report to the run summary. Fails only on newly failing or removed tests.
 name: tests
 
 on:
@@ -32,3 +35,53 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Run tests
         run: python -I -m unittest discover -s tests -t . -v
+
+  testdelta:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          persist-credentials: false
+      - name: Check out head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Tests on base (unittest -v text, read from stderr)
+        working-directory: base
+        run: python -I -m unittest discover -s tests -t . -v --durations 0 2> ../base.txt > /dev/null || true
+      - name: Tests on head
+        working-directory: head
+        run: python -I -m unittest discover -s tests -t . -v --durations 0 2> ../head.txt > /dev/null || true
+      - name: Install testdelta (pinned devtools commit)
+        run: python -m pip install "git+https://github.com/kylescherich/devtools@05e771eb42332679a1893291dc42008ccb089d7e"
+      - name: Compare (Markdown to the run summary; fail only on newly failing or removed)
+        run: |
+          set +e
+          testdelta base.txt head.txt --format md >> "$GITHUB_STEP_SUMMARY"
+          testdelta base.txt head.txt --format json > delta.json
+          code=$?
+          set -e
+          echo "testdelta exit code: $code"
+          if [ "$code" -ne 0 ] && [ "$code" -ne 1 ]; then
+            echo "testdelta could not compare (exit $code)"; exit 1
+          fi
+          python - <<'PY'
+          import json, sys
+          d = json.load(open("delta.json"))
+          bad = {k: [c["id"] for c in d.get(k, [])] for k in ("newly_failing", "removed")}
+          for k, ids in bad.items():
+              print(f"{k}: {len(ids)}")
+              for i in ids:
+                  print(f"  {i}")
+          sys.exit(1 if any(bad.values()) else 0)
+          PY
