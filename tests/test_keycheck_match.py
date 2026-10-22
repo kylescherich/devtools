@@ -9,13 +9,14 @@ from keycheck import scan as kscan
 from tests import keycheck_fixtures as fx
 
 MATCHED = ("id_rsa", "id_ed25519", "cert.pem", "server.key", ".keys",
-           "my_secret.txt", "API_TOKEN", "Client-Secrets.json", ".env", ".env.local",
+           "my_secret.json", "API_TOKEN", "Client-Secrets.json", ".env", ".env.local",
            ".git-credentials", ".netrc", "pc-tasks/healthchecks/backup.url",
            "a/healthchecks/deep/x.url", ".openhands/settings.json",
            ".claude/.credentials.json")
 NOT_MATCHED = ("id_rsa.pub", "notes.txt", "settings.json", "other/x.url",
                ".openhands/sub/settings.json", "x/.credentials.json",
-               ".claude/settings.json", ".env.example", "README.md", "keys.txt")
+               ".claude/settings.json", ".env.example", "README.md", "keys.txt",
+               "my_secret.txt")
 
 
 class TestMatching(fx.Tree):

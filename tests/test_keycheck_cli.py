@@ -55,13 +55,13 @@ class TestReports(fx.Tree):
     def test_json_schema(self):
         self.make("id_rsa", 0o600, age_days=3)
         _, data, _ = self.scan()
-        self.assertEqual(list(data), ["schema", "root", "files", "counts"])
+        self.assertEqual(list(data), ["schema", "root", "skips", "files", "counts"])
         self.assertEqual(data["schema"], "keycheck/1")
         self.assertEqual(data["root"], self.root)
         self.assertEqual(data["files"], [{"path": "id_rsa",
                                           "size": len(fx.CONTENT.encode("utf-8")),
                                           "age_days": 3, "mode": "0600",
-                                          "flags": ["OK"]}])
+                                          "flags": ["OK"], "note": ""}])
         self.assertEqual(list(data["counts"]), [
             "total", "IN-REPO-NOT-IGNORED", "OTHERS-CAN-READ", "STALE-COPY", "OLD",
             "SYMLINK", "OK", "unreadable_dirs"])
@@ -110,7 +110,7 @@ class TestReports(fx.Tree):
 
     def test_redaction_is_a_no_op_for_key_names(self):
         names = ("api_token", "client_secret.json", ".env.production", "id_ed25519",
-                 "github_token.bak", "SECRET_KEY.pem", "password_token.txt")
+                 "github_token.bak", "SECRET_KEY.pem", "password_token.json")
         for name in names:
             self.make(name)
         for fmt in ("text", "md", "json"):

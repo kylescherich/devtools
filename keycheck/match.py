@@ -1,17 +1,20 @@
 """Name and path patterns for key and secret files. Pure: never touches disk.
 
 A name is compared in lower case. Key names: id_* (not *.pub), *.pem,
-*.key, .keys, *secret*, *token*, .env and .env.* (not .env.example),
-.git-credentials, .netrc, *.url with a "healthchecks" folder above it,
-settings.json directly inside .openhands, .credentials.json directly inside
-.claude (DEC-459/462). A name ending in a backup suffix (.bak*, .old,
+*.key, .keys, *secret* and *token* (not when the last extension is one
+of .py .h .md .msg .txt: source and docs, DEC-465), .env and .env.* (not
+.env.example), .git-credentials, .netrc, *.url with a "healthchecks"
+folder above it, settings.json directly inside .openhands,
+.credentials.json directly inside .claude (DEC-459/462). A name ending in a backup suffix (.bak*, .old,
 .orig, ~), stripped repeatedly, is judged by what is left: a key name
 there makes it a stale copy, anything else no match.
 """
+import os
 import re
 
 _BACKUP = (re.compile(r"~$"), re.compile(r"\.old$"), re.compile(r"\.orig$"),
            re.compile(r"(?<=.)\.bak.*$"))
+NOISE_EXT = (".py", ".h", ".md", ".msg", ".txt")
 
 
 def _strip_backup(name):
@@ -30,7 +33,8 @@ def _is_key(parents, name):
     parent = parents[-1].lower() if parents else ""
     return ((n.startswith("id_") and not n.endswith(".pub"))
             or n.endswith((".pem", ".key")) or n == ".keys"
-            or "secret" in n or "token" in n
+            or (("secret" in n or "token" in n)
+                and os.path.splitext(n)[1] not in NOISE_EXT)
             or n == ".env" or (n.startswith(".env.") and n != ".env.example")
             or n in (".git-credentials", ".netrc")
             or (n.endswith(".url") and any(p.lower() == "healthchecks" for p in parents))

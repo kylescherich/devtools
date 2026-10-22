@@ -29,6 +29,17 @@ flags (one row per matched file, worst first):
   SYMLINK              a matched name that is a symlink (never followed)
   OK                   none of the above
 
+skipped (never scanned):
+  .git, node_modules, __pycache__, site-packages, virtualenvs (pyvenv.cfg),
+  ~/.cache, ~/.local/share/docker, other devices (mounts) and symlinks
+  (never followed); always, also with --all
+  ~/.local/share/uv, ~/.claude/plugins: by default; --all scans them
+  The report lists the skips in effect.
+
+notes:
+  in-repo fixture?     an IN-REPO-NOT-IGNORED file under a tests/ or test/
+                       folder of its repo; still flagged, still exit 1
+
 exit codes:
   code  meaning
   0     nothing flagged except OK, OLD or SYMLINK
@@ -78,6 +89,9 @@ def _build_parser():
     parser.add_argument("--max-age-days", type=_days, default=180, metavar="N",
                         help="flag OLD when unchanged for more than N days "
                              "(default: 180)")
+    parser.add_argument("--all", action="store_true", dest="all_",
+                        help="also scan ~/.local/share/uv and ~/.claude/plugins; "
+                             "the other skips stay on")
     return parser
 
 
@@ -115,8 +129,8 @@ def main(argv=None):
         if not os.path.isdir(root):
             return _fail(f"not a directory: {given}", EXIT_USAGE)
     now = time.time()
-    scanned = [(display(r, home), scan.scan(r, home, now, args.max_age_days))
+    scanned = [(display(r, home), scan.scan(r, home, now, args.max_age_days, args.all_))
                for r in roots]
-    data = build(scanned)
+    data = build(scanned, scan.skips(args.all_))
     _write(sys.stdout, render(data, args.format))
     return EXIT_FLAGGED if flagged(data) else EXIT_OK

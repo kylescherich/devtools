@@ -2,9 +2,13 @@
 
 Only os.scandir and lstat: a matched file is never opened and a symlink is
 never followed (a matched symlink is listed as SYMLINK with its lstat
-facts). Skipped: .git, node_modules, __pycache__, site-packages, any
-directory holding pyvenv.cfg, ~/.cache, ~/.local/share/docker, and any
+facts). Skipped always: .git, node_modules, __pycache__, site-packages,
+any directory holding pyvenv.cfg, ~/.cache, ~/.local/share/docker, and any
 directory on another device than the root (no crossing into mounts).
+Skipped unless --all (DEC-465): ~/.local/share/uv and ~/.claude/plugins.
+Home paths match wherever the root is. An IN-REPO-NOT-IGNORED file with a
+tests/ or test/ folder in its path inside the repo gets the note
+"in-repo fixture?"; it stays flagged.
 """
 import dataclasses
 import os
@@ -15,6 +19,10 @@ from keycheck import acl, gitcheck, match
 FLAG_ORDER = ("IN-REPO-NOT-IGNORED", "OTHERS-CAN-READ", "STALE-COPY", "OLD", "SYMLINK")
 EXIT_FLAGS = ("IN-REPO-NOT-IGNORED", "OTHERS-CAN-READ", "STALE-COPY")
 SKIP_NAMES = {".git", "node_modules", "__pycache__", "site-packages"}
+HOME_SKIPS = (".cache", ".local/share/docker")
+NOISE_SKIPS = (".local/share/uv", ".claude/plugins")      # off with --all
+FIXTURE_DIRS = {"tests", "test"}
+FIXTURE_NOTE = "in-repo fixture?"
 DAY = 86400
 
 
@@ -25,6 +33,7 @@ class Entry:
     age_days: int
     mode: str           # "0600"
     flags: list
+    note: str = ""
 
 
 @dataclasses.dataclass
@@ -37,9 +46,26 @@ def _device(path):
     return os.lstat(path).st_dev
 
 
-def _walk(root, home):
+def skips(all_=False):
+    """Every skip in effect, as shown in reports."""
+    home = HOME_SKIPS + (() if all_ else NOISE_SKIPS)
+    return (sorted(SKIP_NAMES) + ["virtualenvs (pyvenv.cfg)"]
+            + ["~/" + s for s in home] + ["other devices", "symlinks"])
+
+
+def _home_skips(home, all_):
+    rels = HOME_SKIPS + (() if all_ else NOISE_SKIPS)
+    return {os.path.join(home, *rel.split("/")) for rel in rels}
+
+
+def _fixture_note(path, tree):
+    parents = os.path.relpath(path, tree).split(os.sep)[:-1]
+    return FIXTURE_NOTE if FIXTURE_DIRS.intersection(parents) else ""
+
+
+def _walk(root, home, all_):
     """Yield (path, kind, lstat result) for matched names; count unreadable dirs."""
-    skip = {os.path.join(home, ".cache"), os.path.join(home, ".local", "share", "docker")}
+    skip = _home_skips(home, all_)
     device = _device(root)
     counter = {"unreadable": 0}
     found = []
@@ -73,9 +99,9 @@ def _walk(root, home):
     return found, counter["unreadable"]
 
 
-def scan(root, home, now, max_age_days):
+def scan(root, home, now, max_age_days, all_=False):
     root = os.path.abspath(root)
-    found, unreadable = _walk(root, home)
+    found, unreadable = _walk(root, home, all_)
     readable_by_others = acl.reader() if os.name == "nt" else None
 
     trees = {}
@@ -93,8 +119,10 @@ def scan(root, home, now, max_age_days):
     files = []
     for path, kind, st in found:
         flags = set()
+        note = ""
         if path in exposed:
             flags.add("IN-REPO-NOT-IGNORED")
+            note = _fixture_note(path, trees[os.path.dirname(path)])
         if stat.S_ISLNK(st.st_mode):
             flags.add("SYMLINK")
         else:
@@ -111,5 +139,6 @@ def scan(root, home, now, max_age_days):
         files.append(Entry(rel=os.path.relpath(path, root).replace(os.sep, "/"),
                            size=st.st_size, age_days=age,
                            mode=f"{stat.S_IMODE(st.st_mode):04o}",
-                           flags=[f for f in FLAG_ORDER if f in flags] or ["OK"]))
+                           flags=[f for f in FLAG_ORDER if f in flags] or ["OK"],
+                           note=note))
     return Result(files=files, unreadable_dirs=unreadable)
