@@ -1,5 +1,12 @@
 # HANDOFF — devtools
 
+## Status: keycheck noise (BRIEF-DEVWS-044 / DEC-465, DEC-469, branch devtools/keycheck-noise, not pushed)
+- Default skips ~/.local/share/uv and ~/.claude/plugins (home relative); `--all` scans them, the safety skips stay on. `*secret*`/`*token*` only when the last extension is not .py .h .md .msg .txt (backup variants judged after the suffix); exact patterns unchanged. IN-REPO-NOT-IGNORED under tests/ or test/ in its repo: note "in-repo fixture?", still flagged. keycheck/1 gains `skips` (top level) and `note` (per file); text/md show both.
+- Test-first: 13 new tests (tests/test_keycheck_noise.py), 11 failed on ae49c58, 2 pass by design; 1 cycle. Existing test edits: my_secret.txt and password_token.txt renamed to .json (now source/doc names), test_json_schema expects skips and note. Mutation (no extension check) fails 5 tests. Tests: 857 in total (was 844); 3.12 and 3.11 OK. Live DevWS run: 6 OK rows plus the devtools fixture tests/fixtures/sample_repo/.env (IN-REPO-NOT-IGNORED, OTHERS-CAN-READ, in-repo fixture?), exit 1. Evidence in ~/brief-044/.
+
+### Next (keycheck noise)
+- Kyle reviews and pushes.
+
 ## Status: keycheck (BRIEF-DEVWS-041 / DEC-449, DEC-459, DEC-462, branch devtools/keycheck, not pushed)
 - New tool #8: `keycheck [ROOT ...] [--format text|md|json] [--max-age-days 180]`, default root home. Name-only matching (brief list plus .openhands/settings.json and .claude/.credentials.json), backup variants STALE-COPY; flags IN-REPO-NOT-IGNORED (first), OTHERS-CAN-READ (POSIX bits, Windows icacls text), STALE-COPY, OLD, SYMLINK, OK; exit 0/1/2; JSON keycheck/1. Never opens a matched file (scandir/lstat, git check-ignore --stdin, icacls); skips .git, node_modules, __pycache__, site-packages, venvs, ~/.cache, ~/.local/share/docker, other devices.
 - Test-first: commit 1 tests + stub (45 failures at their own assertions), commit 2 implementation (1 cycle). Existing test edits: PACKAGES in test_xray_adoption and test_askdata_isolation. Mutation (every in-repo file treated as ignored) fails 5 tests. Tests: 844 in total (was 794); 3.12 and 3.11 OK. Live DevWS run done (read-only, nothing fixed); evidence in ~/brief-041/.

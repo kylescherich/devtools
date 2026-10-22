@@ -758,7 +758,7 @@ content or an environment value. Standard library only; Python 3.11 to 3.13.
 ## Usage
 
 ```bash
-keycheck [ROOT ...] [--format text|md|json] [--max-age-days 180]
+keycheck [ROOT ...] [--format text|md|json] [--max-age-days 180] [--all]
 ```
 
 Examples (synthetic paths):
@@ -767,13 +767,18 @@ Examples (synthetic paths):
 keycheck                                  # your home directory, text report
 keycheck ~/projects --format md
 keycheck ~ --max-age-days 365 --format json
+keycheck ~ --all                          # also scan ~/.local/share/uv, ~/.claude/plugins
 ```
 
 ## What it matches
 
 Names are compared in lower case:
 
-- `id_*` (not `*.pub`), `*.pem`, `*.key`, `.keys`, `*secret*`, `*token*`
+- `id_*` (not `*.pub`), `*.pem`, `*.key`, `.keys`
+- `*secret*` and `*token*`, but not when the last extension is `.py`, `.h`,
+  `.md`, `.msg` or `.txt` (source and docs: `tokenize.py`, `secret_shapes.py`,
+  `notes-token.md`). `secrets.env`, `api.token`, `secret.json` and
+  `token_store` still match. `id_token.txt` matches through `id_*`.
 - `.env` and `.env.*`, but not `.env.example`
 - `.git-credentials`, `.netrc`
 - `*.url` with a folder named `healthchecks` above it
@@ -782,21 +787,31 @@ Names are compared in lower case:
 - backup variants of any of these: `*.bak*`, `*.old`, `*.orig`, `*~`
   (stripped repeatedly, so `.netrc.old~` is a backup of `.netrc`). A backup
   of a name that is not a key name (`id_rsa.pub.old`, `notes.txt.bak`) is
-  not matched.
+  not matched. The extension rule uses the name after the suffix is
+  removed: `secrets.py.bak` is not matched, `secret.json.bak` is a
+  `STALE-COPY`.
 
-Matching by name finds ordinary files too (`tokenize.py`, `secrets.py`,
-test fixtures). They are listed like any other match; the flags show
-which ones matter.
+The extension rule applies to `*secret*` and `*token*` only; every other
+pattern matches whatever folder it is in and whatever its extension, so a
+real `.env` under `tests/`, `docs/` or `lib/tokenizer/` is still found.
 
 ## What it skips
 
 - directories named `.git`, `node_modules`, `__pycache__`, `site-packages`
 - any directory holding a `pyvenv.cfg` (a virtualenv)
 - `~/.cache` and `~/.local/share/docker`
+- by default also `~/.local/share/uv` (uv's Python copies) and
+  `~/.claude/plugins` (plugin sources); `--all` scans these two. The home
+  paths are skipped wherever the root is; a `.claude/plugins` folder
+  elsewhere is scanned.
 - any directory on another device than the root (no crossing into mounts,
   so no `/mnt/c` on WSL)
 - symlinks are never followed; a symlink with a matched name is listed as
   `SYMLINK`. Directories it cannot list are counted as `unreadable_dirs`.
+
+Every skip except the two `--all` turns off stays on with `--all`.
+The report lists the skips in effect (`Skipped` in text and md, `skips`
+in JSON).
 
 ## Flags
 
@@ -812,14 +827,23 @@ other flagged rows, then the rest, each by path.
 | `SYMLINK` | the matched name is a symlink; not followed, no permission or age check |
 | `OK` | none of the above |
 
+An `IN-REPO-NOT-IGNORED` file whose path inside its repo has a `tests/` or
+`test/` folder gets the note `in-repo fixture?` (the `note` column in text
+and md, the `note` field in JSON). It is a hint, not a flag: the row stays
+flagged and the exit code is still 1.
+
 ## JSON schema (`--format json`, schema `keycheck/1`)
 
 ```
 {
   "schema": "keycheck/1",
   "root": "~",
+  "skips": [".git", "__pycache__", "node_modules", "site-packages",
+            "virtualenvs (pyvenv.cfg)", "~/.cache", "~/.local/share/docker",
+            "~/.local/share/uv", "~/.claude/plugins", "other devices",
+            "symlinks"],
   "files": [{"path": ".ssh/id_ed25519", "size": 411, "age_days": 12,
-             "mode": "0600", "flags": ["OK"]}],
+             "mode": "0600", "flags": ["OK"], "note": ""}],
   "counts": {"total": 1, "IN-REPO-NOT-IGNORED": 0, "OTHERS-CAN-READ": 0,
              "STALE-COPY": 0, "OLD": 0, "SYMLINK": 0, "OK": 1,
              "unreadable_dirs": 0}
@@ -828,7 +852,9 @@ other flagged rows, then the rest, each by path.
 
 Paths are relative to the root, and the root is shown with `~` for home.
 With several ROOTs, `root` is a list and each path starts with its root
-(`~/projects/app/.env`).
+(`~/projects/app/.env`). `skips` lists the skips in effect (without the
+last two under `--all`); `note` is `""` or `"in-repo fixture?"`. Both
+fields were added in BRIEF-DEVWS-044; the schema stays `keycheck/1`.
 
 ## Safety rules
 
@@ -853,7 +879,9 @@ With several ROOTs, `root` is a list and each path starts with its root
 - Windows rights given as specific-rights lists (`(RD)`, `(GR)`) are not
   counted; only R, RX, M and F are.
 - Name matching misses a key file with an unusual name, and finds ordinary
-  files whose names contain `secret` or `token`.
+  files whose names contain `secret` or `token` outside source and docs
+  extensions (`token_cache.json`). The extension rule also hides a real
+  secret saved as `secret.txt` or `token.md`.
 
 ## Exit codes
 
