@@ -745,3 +745,120 @@ When several apply, the leftmost wins: 2 > 4 > 1 > 0.
 Dynamic reads and unreadable files alone do not change the exit code;
 they are listed so you can check them by hand. With no example file and no
 literal reads the exit code is 0.
+
+# keycheck
+
+Find key and secret files that others can read, stale backup copies, old
+keys and keys inside a git repo that are not ignored. `keycheck` matches by
+name only and never opens a matched file: it uses `lstat`, directory
+listings, `git check-ignore` (names on stdin) and on Windows `icacls <path>`.
+It prints paths, sizes, ages, modes and flags, never content, a hash of
+content or an environment value. Standard library only; Python 3.11 to 3.13.
+
+## Usage
+
+```bash
+keycheck [ROOT ...] [--format text|md|json] [--max-age-days 180]
+```
+
+Examples (synthetic paths):
+
+```bash
+keycheck                                  # your home directory, text report
+keycheck ~/projects --format md
+keycheck ~ --max-age-days 365 --format json
+```
+
+## What it matches
+
+Names are compared in lower case:
+
+- `id_*` (not `*.pub`), `*.pem`, `*.key`, `.keys`, `*secret*`, `*token*`
+- `.env` and `.env.*`, but not `.env.example`
+- `.git-credentials`, `.netrc`
+- `*.url` with a folder named `healthchecks` above it
+- `settings.json` directly inside a folder named `.openhands`
+- `.credentials.json` directly inside a folder named `.claude`
+- backup variants of any of these: `*.bak*`, `*.old`, `*.orig`, `*~`
+  (stripped repeatedly, so `.netrc.old~` is a backup of `.netrc`). A backup
+  of a name that is not a key name (`id_rsa.pub.old`, `notes.txt.bak`) is
+  not matched.
+
+Matching by name finds ordinary files too (`tokenize.py`, `secrets.py`,
+test fixtures). They are listed like any other match; the flags show
+which ones matter.
+
+## What it skips
+
+- directories named `.git`, `node_modules`, `__pycache__`, `site-packages`
+- any directory holding a `pyvenv.cfg` (a virtualenv)
+- `~/.cache` and `~/.local/share/docker`
+- any directory on another device than the root (no crossing into mounts,
+  so no `/mnt/c` on WSL)
+- symlinks are never followed; a symlink with a matched name is listed as
+  `SYMLINK`. Directories it cannot list are counted as `unreadable_dirs`.
+
+## Flags
+
+One row per matched file. Rows with `IN-REPO-NOT-IGNORED` come first, then
+other flagged rows, then the rest, each by path.
+
+| flag | meaning |
+| --- | --- |
+| `IN-REPO-NOT-IGNORED` | inside a git work tree and `git check-ignore` says it is not ignored (a tracked file is not ignored even if a pattern matches it) |
+| `OTHERS-CAN-READ` | POSIX: the group or other read bit is set. Windows: an ACE grants R, RX, M or F to a principal other than the owner, `NT AUTHORITY\SYSTEM` or `BUILTIN\Administrators` |
+| `STALE-COPY` | a backup variant of a key name |
+| `OLD` | unchanged for more than `--max-age-days` (default 180) |
+| `SYMLINK` | the matched name is a symlink; not followed, no permission or age check |
+| `OK` | none of the above |
+
+## JSON schema (`--format json`, schema `keycheck/1`)
+
+```
+{
+  "schema": "keycheck/1",
+  "root": "~",
+  "files": [{"path": ".ssh/id_ed25519", "size": 411, "age_days": 12,
+             "mode": "0600", "flags": ["OK"]}],
+  "counts": {"total": 1, "IN-REPO-NOT-IGNORED": 0, "OTHERS-CAN-READ": 0,
+             "STALE-COPY": 0, "OLD": 0, "SYMLINK": 0, "OK": 1,
+             "unreadable_dirs": 0}
+}
+```
+
+Paths are relative to the root, and the root is shown with `~` for home.
+With several ROOTs, `root` is a list and each path starts with its root
+(`~/projects/app/.env`).
+
+## Safety rules
+
+- A matched file is never opened, read or hashed; a test replaces `open`,
+  `io.open`, `os.open`, `Path.open`, `Path.read_text` and `Path.read_bytes`
+  and fails if any is called on a file under the scan root.
+- `git` runs by absolute path with `shell=False`, a 30 s timeout, every
+  `GIT_*` variable removed, no prompt, no optional locks, and
+  `core.fsmonitor` and hooks off. Global git config stays on, so a global
+  `core.excludesFile` counts as ignored. When git fails (not installed, a
+  timeout, a repository git refuses) the file counts as not ignored.
+- On Windows, `icacls <path>` output is parsed; `icacls` does not print the
+  owner, so the owner is the current user from `whoami` (compared, never
+  printed). When `icacls` fails, the file counts as readable by others.
+- No network, writes nothing, fixes nothing. Everything printed also passes
+  through the same redaction as Log Lens. Paths are untrusted: control and
+  bidi characters are shown escaped; Markdown special characters are
+  escaped.
+
+## Known limits
+
+- Windows rights given as specific-rights lists (`(RD)`, `(GR)`) are not
+  counted; only R, RX, M and F are.
+- Name matching misses a key file with an unusual name, and finds ordinary
+  files whose names contain `secret` or `token`.
+
+## Exit codes
+
+| code | meaning |
+| --- | --- |
+| 0 | nothing flagged except `OK`, `OLD` or `SYMLINK` |
+| 1 | any `OTHERS-CAN-READ`, `STALE-COPY` or `IN-REPO-NOT-IGNORED` |
+| 2 | usage error, or a ROOT that is missing or not a directory |

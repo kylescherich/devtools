@@ -62,6 +62,12 @@ Run from the repo root:
 - Everything printed passes through `gitarch/_redact.py`, a byte-for-byte copy of `loglens/redact.py` (no import between packages; `test_redact_copy_identical` checks it).
 - Standard library only; Python 3.11 and 3.12; pure ASCII source and commit messages; both suites OK before every commit. Test repos are synthetic, built at test time in temp dirs by `tests/gitarch_fixtures.py`.
 
+## keycheck rules (BRIEF-DEVWS-041)
+- keycheck matches by name or path pattern only and NEVER opens, reads or hashes a matched file, in tests or live; it uses lstat, scandir, `git check-ignore -z --stdin` and on Windows `icacls <path>`. The never-open guard test patches open, io.open, os.open, Path.open/read_text/read_bytes.
+- Never follows symlinks; never crosses devices; output is paths, sizes, ages, modes and flags only, never content, hashes or environment values.
+- Subprocess only in keycheck/gitcheck.py and keycheck/acl.py: absolute path, shell=False, timeout, GIT_* removed; a git or icacls failure counts on the flagged side. ACL tests use captured icacls text only; never change a real ACL.
+- Exit codes: 0 only OK/OLD/SYMLINK, 1 any OTHERS-CAN-READ, STALE-COPY or IN-REPO-NOT-IGNORED, 2 usage. Standard library only; Python 3.11 to 3.13; pure ASCII; both suites OK before every commit.
+
 ## Test Delta rules (testdelta, BRIEF-DEVWS-024)
 - testdelta compares two test results (unittest -v text or JUnit XML); it NEVER runs tests. It opens only the two inputs and --output; no network, no subprocess, never follows symlinks.
 - XML: refuse any input containing `<!DOCTYPE` or `<!ENTITY` (exit 4) before parsing; inputs must be UTF-8; 50 MB cap per file (`--max-bytes`), checked before reading; parse only with stdlib `xml.etree.ElementTree`, only after those checks.

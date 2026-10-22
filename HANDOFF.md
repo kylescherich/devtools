@@ -1,5 +1,12 @@
 # HANDOFF — devtools
 
+## Status: keycheck (BRIEF-DEVWS-041 / DEC-449, DEC-459, DEC-462, branch devtools/keycheck, not pushed)
+- New tool #8: `keycheck [ROOT ...] [--format text|md|json] [--max-age-days 180]`, default root home. Name-only matching (brief list plus .openhands/settings.json and .claude/.credentials.json), backup variants STALE-COPY; flags IN-REPO-NOT-IGNORED (first), OTHERS-CAN-READ (POSIX bits, Windows icacls text), STALE-COPY, OLD, SYMLINK, OK; exit 0/1/2; JSON keycheck/1. Never opens a matched file (scandir/lstat, git check-ignore --stdin, icacls); skips .git, node_modules, __pycache__, site-packages, venvs, ~/.cache, ~/.local/share/docker, other devices.
+- Test-first: commit 1 tests + stub (45 failures at their own assertions), commit 2 implementation (1 cycle). Existing test edits: PACKAGES in test_xray_adoption and test_askdata_isolation. Mutation (every in-repo file treated as ignored) fails 5 tests. Tests: 844 in total (was 794); 3.12 and 3.11 OK. Live DevWS run done (read-only, nothing fixed); evidence in ~/brief-041/.
+
+### Next (keycheck)
+- Kyle reviews and pushes; the Windows live run (%LOCALAPPDATA%\pc-tasks, the harness key folder, %USERPROFILE%\.ssh) is Kyle's step; every fix goes to a Hub DEC.
+
 ## Status: Test Delta renamed_params (BRIEF-DEVWS-039 / DEC-446, branch devtools/testdelta-renamed-params, not pushed)
 - JUnit ids unmatched by full id are grouped by base id (trailing [...] removed); equal counts and one status throughout -> renamed_params (not removed/added, not a regression), one warning per base id ("... -- fix the ids", ASCII dashes), a section in text/md/html when any, JSON key renamed_params (additive, testdelta/1). Unequal counts or any status difference: as before. unittest never grouped. --strict-ids: output of 8789cfe byte for byte (SHA-256 pinned in tests/test_testdelta_renamed.py).
 - Test-first: 18 new tests failed on 8789cfe, 1 cycle. Existing test edit: test_top_level_keys_in_order expects the new key. Mutation (no status-equality check) fails the two status-difference tests. Tests: 794 in total (was 776); 3.12 and 3.11 OK. CI pin stays 05e771e. Evidence in ~/brief-039/.
