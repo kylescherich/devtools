@@ -9,7 +9,7 @@ requires-python = ">=3.11"
 dependencies = []
 
 [tool.setuptools]
-packages = ["repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta", "envcontract"]
+packages = ["repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta", "envcontract", "keycheck"]
 
 [project.scripts]
 repo-xray = "repo_xray.cli:main"
@@ -19,6 +19,7 @@ loglens = "loglens.cli:main"
 gitarch = "gitarch.cli:main"
 testdelta = "testdelta.cli:main"
 envcontract = "envcontract.cli:main"
+keycheck = "keycheck.cli:main"
 
 [tool.repo-xray]
-independent = ["repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta", "envcontract"]
+independent = ["repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta", "envcontract", "keycheck"]

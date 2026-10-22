@@ -12,7 +12,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 
 PACKAGES = ["repo_xray", "askdata", "jsondiff", "loglens", "gitarch", "testdelta",
-            "envcontract"]
+            "envcontract", "keycheck"]
 
 
 class TestXrayAdoption(unittest.TestCase):
