@@ -63,7 +63,7 @@ jobs:
         working-directory: head
         run: python -I -m unittest discover -s tests -t . -v --durations 0 2> ../head.txt > /dev/null || true
       - name: Install testdelta (pinned devtools commit)
-        run: python -m pip install "git+https://github.com/kylescherich/devtools@05e771eb42332679a1893291dc42008ccb089d7e"
+        run: python -m pip install "git+https://github.com/kylescherich/devtools@15d2e6487ab91ecd54d661486718cfbb4290556b"
       - name: Compare (Markdown to the run summary; fail only on newly failing or removed)
         run: |
           set +e
