@@ -73,3 +73,17 @@ jobs:
           set -e
           echo "pip-audit exit code: $code"
           python -I .github/scripts/audit_summary.py audit.json audit-ignore.txt --exit-code "$code" --pip-audit-version "$version" --service pypi | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Proof (temporary)
+        run: |
+          # BRIEF-DEVWS-046 proof run: a deliberately vulnerable pin, metadata only.
+          # Never installed (--no-deps --disable-pip), never part of the real set.
+          printf 'urllib3==1.24.1\n' > proof-requirements.txt
+          version="pip-audit not installed"
+          if [ -x /tmp/auditor/bin/pip-audit ]; then version="$(/tmp/auditor/bin/pip-audit --version || true)"; fi
+          set +e
+          /tmp/auditor/bin/pip-audit -r proof-requirements.txt --no-deps --disable-pip --progress-spinner off -f json -o proof.json
+          code=$?
+          set -e
+          echo "pip-audit exit code (proof): $code"
+          echo "### Proof (temporary): urllib3==1.24.1" | tee -a "$GITHUB_STEP_SUMMARY"
+          python -I .github/scripts/audit_summary.py proof.json audit-ignore.txt --exit-code "$code" --pip-audit-version "$version" --service pypi | tee -a "$GITHUB_STEP_SUMMARY"
