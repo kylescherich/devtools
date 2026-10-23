@@ -890,3 +890,28 @@ fields were added in BRIEF-DEVWS-044; the schema stays `keycheck/1`.
 | 0 | nothing flagged except `OK`, `OLD` or `SYMLINK` |
 | 1 | any `OTHERS-CAN-READ`, `STALE-COPY` or `IN-REPO-NOT-IGNORED` |
 | 2 | usage error, or a ROOT that is missing or not a directory |
+
+# Dependency audit
+
+CI only (BRIEF-DEVWS-046, DEC-490): `.github/workflows/audit.yml` runs
+`pip-audit==2.10.1` on every pull request, every push to `main`, by hand
+(`workflow_dispatch`) and weekly (Monday 13:17 UTC), because advisories appear
+without code changes. pip-audit is never installed or run outside CI, and it is
+not a dependency of this repo.
+
+- What it audits: the set `pip install .` installs in a fresh venv, frozen to
+  `audit-requirements.txt`. devtools has no dependencies, so the set is empty
+  and the summary says so; that is not an error.
+- How: pip-audit runs from its own venv with `--no-deps --disable-pip` against
+  the default PyPI vulnerability service, and
+  `.github/scripts/audit_summary.py` writes a Markdown table (package,
+  installed, advisory id, aliases, fixed in) to the run summary.
+- Phase 1 is report-only: the job is green whatever the audit finds, and also
+  when pip-audit cannot run (`audit could not run (exit N)`). Only the
+  formatter's own self-test can fail it.
+- `audit-ignore.txt` takes one entry per line,
+  `<advisory id> | <reason> | <expires YYYY-MM-DD> | <DEC-NNN>`. In Phase 1
+  entries are shown, and malformed or expired ones are marked as warnings;
+  nothing is enforced. Phase 2 needs a Hub DEC.
+- A finding becomes a normal upgrade brief through the Hub. The workflow never
+  upgrades anything and never opens a PR.

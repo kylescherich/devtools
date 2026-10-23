@@ -1,0 +1,75 @@
+# Dependency audit with pip-audit, CI only (BRIEF-DEVWS-046, Hub DEC-490).
+# Phase 1 = report-only: the job is green whatever the audit finds, and also when
+# pip-audit itself errors; only the formatter self-test can fail it. Audits the set the
+# tests install, frozen from a fresh venv; pip-audit runs from its own venv with
+# --no-deps --disable-pip, so nothing from the audited set is installed for it.
+# Read-only, no secrets, no tokens. Weekly run because advisories appear without code
+# changes. A finding becomes an upgrade brief through the Hub; never auto-upgrade or auto-PR.
+name: audit
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: "17 13 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Self-test the formatter
+        run: python -I -m unittest discover -s .github/scripts -p 'test_*.py' -v
+      - name: Build the audited set (as the tests install it)
+        id: build
+        run: |
+          if python -m venv /tmp/target \
+            && /tmp/target/bin/pip install . \
+            && /tmp/target/bin/pip freeze --exclude-editable --exclude devtools > audit-requirements.txt; then
+            echo "result=ok" >> "$GITHUB_OUTPUT"
+            echo "audit-requirements.txt lines: $(wc -l < audit-requirements.txt)"
+            cat audit-requirements.txt
+          else
+            echo "result=failed" >> "$GITHUB_OUTPUT"
+            echo "::warning::could not build the audited set; the summary will say audit could not run"
+          fi
+      - name: Install the auditor (separate venv)
+        run: |
+          python -m venv /tmp/auditor && /tmp/auditor/bin/pip install pip-audit==2.10.1 \
+            || echo "::warning::could not install pip-audit; the summary will say audit could not run"
+      - name: Audit (report-only) and summary
+        env:
+          BUILD: ${{ steps.build.outputs.result }}
+        run: |
+          version="pip-audit not installed"
+          if [ -x /tmp/auditor/bin/pip-audit ]; then version="$(/tmp/auditor/bin/pip-audit --version || true)"; fi
+          if [ "$BUILD" != "ok" ]; then
+            python -I .github/scripts/audit_summary.py audit.json audit-ignore.txt --exit-code "target-install-failed" --pip-audit-version "$version" --service pypi | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ ! -s audit-requirements.txt ]; then
+            echo "audited set is empty (devtools has no dependencies); pip-audit not run"
+            python -I .github/scripts/audit_summary.py audit.json audit-ignore.txt --empty-set --pip-audit-version "$version" --service pypi | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          set +e
+          /tmp/auditor/bin/pip-audit -r audit-requirements.txt --no-deps --disable-pip --progress-spinner off -f json -o audit.json
+          code=$?
+          set -e
+          echo "pip-audit exit code: $code"
+          python -I .github/scripts/audit_summary.py audit.json audit-ignore.txt --exit-code "$code" --pip-audit-version "$version" --service pypi | tee -a "$GITHUB_STEP_SUMMARY"

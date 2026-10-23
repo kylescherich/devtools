@@ -1,0 +1,3 @@
+# pip-audit ignore list (BRIEF-DEVWS-046, DEC-490). One entry per line:
+# <advisory id> | <reason> | <expires YYYY-MM-DD> | <DEC-NNN>
+# Phase 1 (report-only): entries are shown, never enforced. Phase 2 needs a Hub DEC.
