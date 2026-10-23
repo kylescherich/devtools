@@ -166,6 +166,48 @@ class TestFindings(Case):
         self.assertIn("| a\\|b | 1 | X-1 | none | 2 |", out)
 
 
+DUPLICATED = {
+    "dependencies": [
+        {
+            "name": "urllib3",
+            "version": "1.24.1",
+            "vulns": [
+                {"id": "PYSEC-2019-133", "fix_versions": ["1.24.2"], "aliases": ["CVE-2019-11324"]},
+                {"id": "GHSA-mh33-7rrq-662w", "fix_versions": ["1.24.2"], "aliases": []},
+                {"id": "PYSEC-2019-133", "fix_versions": ["1.24.2"], "aliases": ["GHSA-mh33-7rrq-662w"]},
+            ],
+        },
+        {
+            "name": "urllib3",
+            "version": "1.24.1",
+            "vulns": [
+                {"id": "GHSA-mh33-7rrq-662w", "fix_versions": ["1.24.3"], "aliases": ["CVE-2019-11324"]},
+            ],
+        },
+    ],
+    "fixes": [],
+}
+
+
+class TestDuplicates(Case):
+    def test_each_advisory_once_and_counted_once(self):
+        code, out = self.run_main(self.write_json(DUPLICATED), self.ignore, "--exit-code", "1")
+        self.assertEqual(code, 0)
+        self.assertIn("packages audited: 1", out)
+        self.assertIn("vulnerable: 1", out)
+        self.assertIn("advisories: 2", out)
+        self.assertEqual(out.count("| urllib3 | 1.24.1 | PYSEC-2019-133 |"), 1)
+        self.assertEqual(out.count("| urllib3 | 1.24.1 | GHSA-mh33-7rrq-662w |"), 1)
+
+    def test_duplicates_merge_aliases_and_fix_versions(self):
+        code, out = self.run_main(self.write_json(DUPLICATED), self.ignore, "--exit-code", "1")
+        self.assertEqual(code, 0)
+        self.assertIn(
+            "| urllib3 | 1.24.1 | PYSEC-2019-133 | CVE-2019-11324, GHSA-mh33-7rrq-662w | 1.24.2 |", out
+        )
+        self.assertIn("| urllib3 | 1.24.1 | GHSA-mh33-7rrq-662w | CVE-2019-11324 | 1.24.2, 1.24.3 |", out)
+
+
 class TestSkipped(Case):
     def test_skipped_listed(self):
         code, out = self.run_main(self.write_json(WITH_SKIPPED), self.ignore, "--exit-code", "0")

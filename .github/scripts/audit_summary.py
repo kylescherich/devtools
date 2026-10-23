@@ -110,22 +110,28 @@ def render(args):
         out.append("")
         out.append("No results; the job stays green in Phase 1.")
     else:
-        audited = [d for d in deps if "skip_reason" not in d]
         skipped = [d for d in deps if "skip_reason" in d]
-        rows = []
-        for dep in audited:
-            vulns = dep.get("vulns") or []
-            for v in vulns:
+        # pip-audit's JSON can repeat a dependency or an advisory; show each
+        # (package, version, advisory id) once, merging aliases and fix versions.
+        audited = {}
+        advisories = {}
+        for dep in deps:
+            if "skip_reason" in dep:
+                continue
+            pkg = (str(dep.get("name", "?")), str(dep.get("version", "?")))
+            audited[pkg] = True
+            for v in dep.get("vulns") or []:
                 if not isinstance(v, dict):
                     continue
-                rows.append((
-                    cell(dep.get("name", "?")),
-                    cell(dep.get("version", "?")),
-                    cell(v.get("id", "?")),
-                    cell(", ".join(v.get("aliases") or []) or "none"),
-                    cell(", ".join(v.get("fix_versions") or []) or "none"),
-                ))
-        vulnerable = len({r[0] for r in rows})
+                aliases, fixes = advisories.setdefault(pkg + (str(v.get("id", "?")),), ({}, {}))
+                aliases.update(dict.fromkeys(str(a) for a in v.get("aliases") or []))
+                fixes.update(dict.fromkeys(str(f) for f in v.get("fix_versions") or []))
+        rows = [
+            (cell(name), cell(version), cell(adv),
+             cell(", ".join(aliases) or "none"), cell(", ".join(fixes) or "none"))
+            for (name, version, adv), (aliases, fixes) in advisories.items()
+        ]
+        vulnerable = len({key[:2] for key in advisories})
         out.append("- packages audited: %d" % len(audited))
         out.append("- vulnerable: %d" % vulnerable)
         out.append("- advisories: %d" % len(rows))
